@@ -47,6 +47,9 @@ const mockMemory = {
   biologicalSex: 'male',
   userAge: 28,
   country: 'Brasil',
+  countryCode: 'BR',
+  city: 'São Paulo',
+  trainingPathology: 'Nenhuma',
   foodRestrictions: 'nenhuma',
   consentHealthFitness: true,
   acceptedTerms: true,
@@ -145,66 +148,63 @@ const mockDiet = {
  * Register Playwright route mocks for the production API.
  * Must be called BEFORE page.goto().
  */
+const API_HOST = new URL(API_BASE).hostname
+
+// Em dev/CI o app usa o proxy same-origin (/api/guto/...) em vez da URL absoluta
+// do Render (ver shouldUseApiProxy em lib/api/client.ts). Tratamos como chamada
+// de API tudo que vai pro host do Render OU pro prefixo do proxy, então os mocks
+// valem em local, CI e Vercel.
+function isApiCall(url: URL) {
+  return url.hostname === API_HOST || url.pathname.startsWith('/api/guto')
+}
+
+const jsonBody = (body: unknown) => ({
+  status: 200,
+  contentType: 'application/json',
+  body: JSON.stringify(body),
+})
+
 async function setupApiMocks(page: Page) {
-  // /auth/me
-  await page.route(`${API_BASE}/auth/me`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockUser) })
+  // Casa pelo final do pathname (cobre `/auth/me` e `/api/guto/auth/me`).
+  const onPath = (suffix: string, handler: Parameters<Page['route']>[1]) =>
+    page.route((url) => isApiCall(url) && url.pathname.endsWith(suffix), handler)
+  // Casa por trecho do pathname (endpoints com query/sub-rotas).
+  const onIncludes = (part: string, handler: Parameters<Page['route']>[1]) =>
+    page.route((url) => isApiCall(url) && url.pathname.includes(part), handler)
+
+  // Catch-all: qualquer chamada de API não mockada abaixo responde 200 {} em vez
+  // de cair no proxy real do Next (que tentaria o backend e falharia →
+  // fetch failed → overlay de dev bloqueando cliques). Registrado primeiro =
+  // menor prioridade no Playwright; os mocks específicos abaixo vencem.
+  await page.route((url) => isApiCall(url), (route) => route.fulfill(jsonBody({})))
+
+  await onPath('/auth/me', (route) => route.fulfill(jsonBody(mockUser)))
+  await onPath('/guto/memory', (route) => route.fulfill(jsonBody(mockMemory)))
+  await onPath('/guto/diet/generate', (route) => route.fulfill(jsonBody(mockDiet)))
+  await onPath('/guto/diet', (route) => route.fulfill(jsonBody(mockDiet)))
+  await onIncludes('/guto/proactive', (route) => route.fulfill(jsonBody({ due: false })))
+  await onIncludes('/guto/events', (route) => route.fulfill(jsonBody({ ok: true })))
+  await onPath('/voz', (route) => route.fulfill(jsonBody({ audioContent: null })))
+  await onIncludes('/guto/arena', (route) =>
+    route.fulfill(jsonBody({ rankingType: 'weekly', arenaGroupId: 'qa-group', items: [] }))
   )
-  // /guto/memory — no userId in path (server uses Bearer token)
-  await page.route(`${API_BASE}/guto/memory`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockMemory) })
+  await onIncludes('/guto/validations', (route) => route.fulfill(jsonBody([])))
+  await onIncludes('/validate-name', (route) =>
+    route.fulfill(jsonBody({ status: 'valid', normalized: 'QA', message: 'ok' }))
   )
-  // /guto/diet — no userId in path
-  await page.route(`${API_BASE}/guto/diet`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockDiet) })
-  )
-  // /guto/diet/generate
-  await page.route(`${API_BASE}/guto/diet/generate`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockDiet) })
-  )
-  // /guto (chat POST)
-  await page.route(`${API_BASE}/guto`, (route) => {
+  await onIncludes('/billing', (route) => route.fulfill(jsonBody({ status: 'active' })))
+  // Chat (POST /guto). Registrado por último → prioridade no match do Playwright;
+  // só intercepta POST e não engole /guto/memory, /guto/diet, etc.
+  await onPath('/guto', (route) => {
     if (route.request().method() === 'POST') {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          fala: 'Boa, QA! Treino montado e dieta calibrada. Bora, dupla!',
-          acao: 'none',
-          avatarEmotion: 'default',
-        }),
-      })
+      return route.fulfill(jsonBody({
+        fala: 'Boa, QA! Treino montado e dieta calibrada. Bora, dupla!',
+        acao: 'none',
+        avatarEmotion: 'default',
+      }))
     }
     return route.continue()
   })
-  // /guto/proactive
-  await page.route(`${API_BASE}/guto/proactive**`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ due: false }) })
-  )
-  // /guto/events telemetry
-  await page.route(`${API_BASE}/guto/events`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
-  )
-  // /voz — remote voice synthesis is not under test here.
-  await page.route(`${API_BASE}/voz`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ audioContent: null }) })
-  )
-  // /guto/arena
-  await page.route(`${API_BASE}/guto/arena**`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ rankingType: 'weekly', arenaGroupId: 'qa-group', items: [] }) })
-  )
-  // /guto/validations
-  await page.route(`${API_BASE}/guto/validations**`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
-  )
-  // /guto/name/validate
-  await page.route(`${API_BASE}/guto/name**`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'valid', normalized: 'QA', message: 'ok' }) })
-  )
-  // billing
-  await page.route(`${API_BASE}/billing**`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'active' }) })
-  )
 }
 
 /**

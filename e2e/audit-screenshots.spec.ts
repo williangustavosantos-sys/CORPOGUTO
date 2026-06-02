@@ -32,8 +32,17 @@ const mockMemory = {
   biologicalSex: 'male',
   userAge: 28,
   country: 'Brasil',
+  countryCode: 'BR',
+  city: 'São Paulo',
   heightCm: 175,
   weightKg: 75,
+  trainingPathology: 'Nenhuma',
+  foodRestrictions: 'Nenhuma',
+  // Consentimento — backend é a fonte de verdade (resolveAuthenticatedStage em
+  // guto-app.tsx); sem isto a memory mockada cai na tela de consent.
+  consentHealthFitness: true,
+  acceptedTerms: true,
+  consentAcceptedAt: new Date().toISOString(),
   completedWorkoutDates: ['2026-05-14'],
   adaptedMissionDates: ['2026-05-13'],
   missedMissionDates: ['2026-05-12'],
@@ -113,57 +122,69 @@ const mockDiet = {
   ],
 }
 
+const API_HOST = new URL(API_BASE).hostname
+
+// Em dev/CI o app usa o proxy same-origin (/api/guto/...) em vez da URL absoluta
+// do Render (ver shouldUseApiProxy em lib/api/client.ts). Casamos os dois
+// formatos: tratamos como chamada de API tudo que vai pro host do Render OU
+// pro prefixo do proxy — assim os mocks valem em ambiente local, CI e Vercel.
+function isApiCall(url: URL) {
+  return url.hostname === API_HOST || url.pathname.startsWith('/api/guto')
+}
+
+const jsonBody = (body: unknown) => ({
+  status: 200,
+  contentType: 'application/json',
+  body: JSON.stringify(body),
+})
+
 async function setupApiMocks(page: Page) {
-  await page.route(`${API_BASE}/auth/me`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ userId: TEST_USER_ID, name: 'Willian', email: 'willian@test.com', role: 'student' }) })
+  // Casa pelo final do pathname (cobre `/auth/me` e `/api/guto/auth/me`).
+  const onPath = (suffix: string, handler: Parameters<Page['route']>[1]) =>
+    page.route((url) => isApiCall(url) && url.pathname.endsWith(suffix), handler)
+  // Casa por trecho do pathname (endpoints que recebem query/sub-rotas).
+  const onIncludes = (part: string, handler: Parameters<Page['route']>[1]) =>
+    page.route((url) => isApiCall(url) && url.pathname.includes(part), handler)
+
+  // Catch-all: qualquer chamada de API não mockada abaixo (telemetria /guto/events,
+  // /guto/proactivity/*, etc.) responde 200 {} em vez de cair no proxy real do
+  // Next — que tentaria o backend e falharia (fetch failed → overlay de dev
+  // bloqueando cliques). Registrado primeiro = menor prioridade no Playwright,
+  // então os mocks específicos abaixo vencem.
+  await page.route((url) => isApiCall(url), (route) => route.fulfill(jsonBody({})))
+
+  await onPath('/auth/me', (route) =>
+    route.fulfill(jsonBody({ userId: TEST_USER_ID, name: 'Willian', email: 'willian@test.com', role: 'student' }))
   )
-  await page.route(`${API_BASE}/guto/memory`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockMemory) })
+  await onPath('/guto/memory', (route) => route.fulfill(jsonBody(mockMemory)))
+  await onPath('/guto/diet/generate', (route) => route.fulfill(jsonBody(mockDiet)))
+  await onPath('/guto/diet', (route) => route.fulfill(jsonBody(mockDiet)))
+  await onIncludes('/guto/proactive', (route) => route.fulfill(jsonBody({ due: false })))
+  await onIncludes('/guto/arena', (route) =>
+    route.fulfill(jsonBody({
+      rankingType: 'weekly',
+      arenaGroupId: 'qa-group',
+      items: [
+        { position: 1, userId: 'user-a', pairName: 'GUTO & Maria', avatarStage: 'teen', xp: 1200, validatedWorkouts: 12, status: 'arena.status.on_fire', currentStreak: 7 },
+        { position: 2, userId: TEST_USER_ID, pairName: 'GUTO & Willian', avatarStage: 'baby', xp: 500, validatedWorkouts: 5, status: 'arena.status.consistent', currentStreak: 3 },
+        { position: 3, userId: 'user-b', pairName: 'GUTO & Pedro', avatarStage: 'baby', xp: 300, validatedWorkouts: 3, status: 'arena.status.needs_action', currentStreak: 1 },
+      ],
+    }))
   )
-  await page.route(`${API_BASE}/guto/diet`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockDiet) })
+  await onIncludes('/guto/validations', (route) => route.fulfill(jsonBody([])))
+  await onIncludes('/guto/name', (route) =>
+    route.fulfill(jsonBody({ status: 'valid', normalized: 'Willian', message: 'ok' }))
   )
-  await page.route(`${API_BASE}/guto/diet/generate`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(mockDiet) })
-  )
-  await page.route(`${API_BASE}/guto`, (route) => {
+  await onIncludes('/billing', (route) => route.fulfill(jsonBody({ status: 'active' })))
+  await onPath('/guto/event', (route) => route.fulfill(jsonBody({ ok: true })))
+  // Chat (POST /guto). Registrado por último → tem prioridade no match do
+  // Playwright; só intercepta POST e não engole /guto/memory, /guto/diet, etc.
+  await onPath('/guto', (route) => {
     if (route.request().method() === 'POST') {
-      return route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({ fala: 'E aí, Willian! Treino pronto pra hoje. Bora, dupla!', acao: 'none', avatarEmotion: 'default' }),
-      })
+      return route.fulfill(jsonBody({ fala: 'E aí, Willian! Treino pronto pra hoje. Bora, dupla!', acao: 'none', avatarEmotion: 'default' }))
     }
     return route.continue()
   })
-  await page.route(`${API_BASE}/guto/proactive**`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ due: false }) })
-  )
-  await page.route(`${API_BASE}/guto/arena**`, (route) =>
-    route.fulfill({
-      status: 200, contentType: 'application/json',
-      body: JSON.stringify({
-        rankingType: 'weekly',
-        arenaGroupId: 'qa-group',
-        items: [
-          { position: 1, userId: 'user-a', pairName: 'GUTO & Maria', avatarStage: 'teen', xp: 1200, validatedWorkouts: 12, status: 'arena.status.on_fire', currentStreak: 7 },
-          { position: 2, userId: TEST_USER_ID, pairName: 'GUTO & Willian', avatarStage: 'baby', xp: 500, validatedWorkouts: 5, status: 'arena.status.consistent', currentStreak: 3 },
-          { position: 3, userId: 'user-b', pairName: 'GUTO & Pedro', avatarStage: 'baby', xp: 300, validatedWorkouts: 3, status: 'arena.status.needs_action', currentStreak: 1 },
-        ],
-      }),
-    })
-  )
-  await page.route(`${API_BASE}/guto/validations**`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
-  )
-  await page.route(`${API_BASE}/guto/name**`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'valid', normalized: 'Willian', message: 'ok' }) })
-  )
-  await page.route(`${API_BASE}/billing**`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'active' }) })
-  )
-  await page.route(`${API_BASE}/guto/event`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
-  )
 }
 
 async function injectAuthStorage(page: Page) {
@@ -252,10 +273,9 @@ test.describe('AUDIT — Screenshots página por página', () => {
     await setupApiMocks(page)
     await injectAuthStorage(page)
     await page.goto('/?skip-intro=1')
-    await page.waitForTimeout(2000)
-    const missionBtn = page.getByRole('button', { name: /miss/i }).or(page.locator('[data-tab="mission"]')).or(page.locator('button:has(svg)').nth(1))
-    await missionBtn.click().catch(() => {})
-    await page.waitForTimeout(1000)
+    await page.waitForTimeout(2500)
+    await page.getByRole('button', { name: 'MISSÃO' }).click()
+    await page.waitForTimeout(1500)
     await snap(page, '08-aba-missao')
   })
 
@@ -283,10 +303,9 @@ test.describe('AUDIT — Screenshots página por página', () => {
     await setupApiMocks(page)
     await injectAuthStorage(page)
     await page.goto('/?skip-intro=1')
-    await page.waitForTimeout(2000)
-    const evolBtn = page.locator('button:has(svg)').nth(4)
-    await evolBtn.click().catch(() => {})
-    await page.waitForTimeout(1000)
+    await page.waitForTimeout(2500)
+    await page.getByRole('button', { name: 'EVOLUIR' }).click()
+    await page.waitForTimeout(1500)
     await snap(page, '11-aba-evoluir')
   })
 
@@ -294,10 +313,9 @@ test.describe('AUDIT — Screenshots página por página', () => {
     await setupApiMocks(page)
     await injectAuthStorage(page)
     await page.goto('/?skip-intro=1')
-    await page.waitForTimeout(2000)
-    const pathBtn = page.locator('button:has(svg)').nth(5)
-    await pathBtn.click().catch(() => {})
-    await page.waitForTimeout(1000)
+    await page.waitForTimeout(2500)
+    await page.getByRole('button', { name: 'PERCURSO' }).click()
+    await page.waitForTimeout(1500)
     await snap(page, '12-aba-percurso')
   })
 
