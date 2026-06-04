@@ -717,3 +717,40 @@ export async function cancelDiscardRequest(memoryId: string): Promise<boolean> {
     return false
   }
 }
+
+// Exercício técnico em foco AGORA. Persistido na fonte única (GutoMemory) para
+// ligar a dúvida do treino (chat) e a execução do GUTO Online ao cérebro, de modo
+// que o chat nunca volte ao genérico entre mensagens.
+export interface ActiveExercisePayload {
+  source: "chat" | "online"
+  name: string
+  muscleGroup?: string
+  reps?: string
+  load?: string
+  rest?: string
+  currentSet?: number
+  totalSets?: number
+  note?: string
+}
+
+export async function setActiveExercise(exercise: ActiveExercisePayload): Promise<void> {
+  try {
+    await apiRequest("/guto/active-exercise", {
+      method: "POST",
+      body: JSON.stringify({ exercise }),
+    })
+  } catch {
+    // Contexto de exercício é auxiliar — nunca quebra o fluxo do chat/treino.
+  }
+}
+
+export async function clearActiveExercise(): Promise<void> {
+  try {
+    await apiRequest("/guto/active-exercise", {
+      method: "POST",
+      body: JSON.stringify({ exercise: null }),
+    })
+  } catch {
+    // silencioso.
+  }
+}

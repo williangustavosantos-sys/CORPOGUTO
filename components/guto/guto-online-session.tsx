@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Clock, RotateCcw, Undo2, X } from "lucide-react"
 
 import type { GutoWorkoutPlan } from "@/lib/api/guto"
+import { clearActiveExercise, setActiveExercise } from "@/lib/api/guto"
 import type { EvolutionStage } from "@/types/contract"
 import { GutoOnlineLightAvatar } from "@/components/guto/guto-online-light-avatar"
 
@@ -405,13 +406,37 @@ export function GutoOnlineSession({
       onFinish?.()
     }
 
+    // Ponte GUTO Online → cérebro: persiste o exercício/série em execução na fonte
+    // única (GutoMemory) para que o chat saiba onde o usuário está. Só na troca de
+    // exercício/série, para não bater no backend a cada tick do timer.
+    const setChanged = previous.currentSet !== state.currentSet
+    if (
+      currentExercise &&
+      state.phase !== "finished" &&
+      (exerciseChanged || setChanged || phaseChanged)
+    ) {
+      void setActiveExercise({
+        source: "online",
+        name: currentExercise.name,
+        muscleGroup: currentExercise.muscleGroup,
+        reps: String(currentExercise.reps),
+        load: currentExercise.load ?? undefined,
+        rest: currentExercise.rest,
+        currentSet: state.currentSet,
+        totalSets,
+      })
+    }
+    if (state.phase === "finished" && phaseChanged) {
+      void clearActiveExercise()
+    }
+
     lastPhaseRef.current = {
       phase: state.phase,
       exerciseIndex: state.exerciseIndex,
       currentSet: state.currentSet,
       warmupCompleted: state.warmupCompleted,
     }
-  }, [open, ready, state, exercises, currentExercise, language, userName, speak, onFinish])
+  }, [open, ready, state, exercises, currentExercise, totalSets, language, userName, speak, onFinish])
 
   // ─── Handlers ────────────────────────────────────────────────────────────
   const handleWarmupDone = useCallback(() => {
@@ -626,6 +651,7 @@ export function GutoOnlineSession({
 
   // ─── Validar (libera a tela de validação do treino) ─────────────────────
   const handleValidate = useCallback(() => {
+    void clearActiveExercise()
     onFinish?.()
     onClose()
   }, [onClose, onFinish])

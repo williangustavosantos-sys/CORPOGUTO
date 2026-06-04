@@ -8,6 +8,7 @@ import { Loader2, Mic, Send, TrendingUp, Volume2, VolumeX } from "lucide-react"
 import { getApiErrorMessage } from "@/lib/api/client"
 import {
   cancelDiscardRequest,
+  clearActiveExercise,
   confirmProactiveMemory,
   discardProactiveMemory,
   extractProactivityEvents,
@@ -17,6 +18,7 @@ import {
   openWeeklyConversation,
   requestDiscardProactiveMemory,
   sendGutoMessage,
+  setActiveExercise,
   trackGutoEvent,
   updateProactiveMemory,
   validateProactiveMemory,
@@ -697,8 +699,13 @@ export function ChatTab({
 
   const refreshProactiveMemories = useCallback(async () => {
     const memories = await getProactiveMemories()
-    setProactiveMemories(memories)
-    return memories
+    // Bloco 2 / decisão do fundador: a confirmação de um evento novo (viagem etc.)
+    // é resolvida UMA vez, conversando no chat — o GUTO pergunta com as palavras
+    // dele. O card nunca pergunta a mesma coisa: ele só carrega validação da
+    // semana passada e descarte. (ver docs/GUTO_CONTEXT_AUDIT.md §7, Bloco 2.)
+    const cardMemories = memories.filter((item) => item.status !== "pending_confirmation")
+    setProactiveMemories(cardMemories)
+    return cardMemories
   }, [])
 
   // Botões Sim/Não do card de proatividade: resolve de forma determinística
@@ -805,9 +812,11 @@ export function ChatTab({
   }, [initialXpGranted, initialXpRewardSeen, userId])
 
   const clearActiveContext = useCallback(() => {
+    const hadExercise = activeExerciseContextRef.current !== null
     activeExerciseContextRef.current = null
     activeDietContextRef.current = null
     setContextChip(null)
+    if (hadExercise) void clearActiveExercise()
   }, [])
 
   const wrapWithActiveContext = useCallback((text: string) => {
@@ -1332,6 +1341,17 @@ export function ChatTab({
     activeDietContextRef.current = null
     activeExerciseContextRef.current = buildExerciseModelContext(exercise, memory, lang, workoutPlan)
     setContextChip({ type: "exercise", label: exercise.name })
+    // Persiste o exercício na fonte única (GutoMemory) para o cérebro saber dele
+    // entre mensagens — não some no turno seguinte (CORE §6).
+    void setActiveExercise({
+      source: "chat",
+      name: exercise.name,
+      muscleGroup: exercise.muscleGroup,
+      reps: String(exercise.reps),
+      rest: exercise.rest,
+      totalSets: exercise.sets,
+      note: exercise.note || undefined,
+    })
 
     const hintText = copy.exerciseContextHint(exercise.name)
     const hintId = `g-exercise-ctx-${pendingExerciseQuestion.id}`
