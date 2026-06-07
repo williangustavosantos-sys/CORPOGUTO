@@ -643,10 +643,22 @@ function resolveAuthenticatedStage(
     return "consent"
   }
 
-  // namingConfirmed must be set on THIS device by the student clicking confirm.
-  // Admin-set names do not count. Backwards-compat: onboardingComplete=true implies confirmed.
+  // Pacto concluído no backend (`initialXpGranted`) é a prova de que o aluno
+  // completou TODO o onboarding (consent→naming→calibragem→pacto) em algum
+  // device. É a fonte de verdade do RETORNO: um login novo (sem flags locais no
+  // localStorage) vai DIRETO pro chat, em vez de repetir naming/pacto. O backend
+  // só concede esse XP inicial quando o aluno assina o pacto (grantInitialXp).
+  const pactDoneBackend = Boolean(memory?.initialXpGranted)
+
+  // namingConfirmed: confirmação do aluno NESTE device (flag local) OU prova no
+  // backend (pacto feito ⇒ naming já foi confirmado antes). Sempre exige um nome
+  // real. Nome só de admin (preset do convite), sem confirmação nem pacto, NÃO
+  // conta — preserva a regra do Nome Soberano.
   const hasRealName = hasStoredName(profile) || hasMemoryName(memory)
-  if ((!profile?.namingConfirmed && !profile?.onboardingComplete) || !hasRealName) {
+  const namingConfirmed = Boolean(
+    profile?.namingConfirmed || profile?.onboardingComplete || pactDoneBackend
+  )
+  if (!namingConfirmed || !hasRealName) {
     return "naming"
   }
 
@@ -661,7 +673,8 @@ function resolveAuthenticatedStage(
     return "calibration"
   }
 
-  if (profile?.onboardingComplete || profile?.pactAccepted) {
+  // Pacto: flag local OU prova no backend (XP inicial já concedido).
+  if (profile?.onboardingComplete || profile?.pactAccepted || pactDoneBackend) {
     return "system"
   }
 
