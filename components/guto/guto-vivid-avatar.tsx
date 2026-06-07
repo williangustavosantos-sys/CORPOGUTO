@@ -158,10 +158,11 @@ function Defs({ uid, body }: { uid: string; body: [string, string, string] }) {
         <stop offset="40%" stopColor={EYE_COLOR} />
         <stop offset="100%" stopColor={EYE_DARK} />
       </radialGradient>
-      <radialGradient id={`${uid}-core`} cx="48%" cy="44%" r="60%">
+      <radialGradient id={`${uid}-core`} cx="36%" cy="30%" r="72%">
         <stop offset="0%" stopColor="#ffffff" />
-        <stop offset="45%" stopColor={EYE_GLOW} />
-        <stop offset="100%" stopColor={EYE_COLOR} />
+        <stop offset="30%" stopColor={EYE_GLOW} />
+        <stop offset="72%" stopColor={EYE_COLOR} />
+        <stop offset="100%" stopColor="#1396b8" />
       </radialGradient>
       <filter id={`${uid}-glow`} x="-60%" y="-60%" width="220%" height="220%">
         <feGaussianBlur stdDeviation="3" result="b" />
@@ -274,21 +275,32 @@ function ChestCore({
   const dur = speaking ? Math.min(mood.coreDur, 0.7) : mood.coreDur
   return (
     <g>
-      <circle cx={cx} cy={cy} r={r} fill="#d6f3ff" />
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke={EYE_COLOR} strokeWidth={1.2} opacity={0.5} />
+      {/* halo de energia que respira (luz, sem mover a esfera) */}
       <motion.circle
         cx={cx}
         cy={cy}
-        r={r * 0.76}
-        fill={`url(#${uid}-core)`}
+        r={r * 1.22}
+        fill={EYE_COLOR}
         filter={`url(#${uid}-glow)`}
         style={{ transformOrigin: `${cx}px ${cy}px`, transformBox: "view-box" }}
-        animate={{ scale: [1, mood.coreScale, 1], opacity: [mood.coreMin, 1, mood.coreMin] }}
+        animate={{ opacity: [0.12 * mood.coreMin, 0.42, 0.12 * mood.coreMin], scale: [0.9, mood.coreScale, 0.9] }}
         transition={{ duration: dur, repeat: Infinity, ease: "easeInOut" }}
       />
-      <circle cx={cx} cy={cy} r={r * 0.42} fill={EYE_GLOW} />
-      <circle cx={cx} cy={cy} r={r * 0.2} fill="#ffffff" />
-      {/* anéis de "áudio" quando falando */}
+      {/* esfera 3D — volume pelo gradiente (luz no topo-esquerdo, borda escura embaixo) */}
+      <circle cx={cx} cy={cy} r={r} fill={`url(#${uid}-core)`} />
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke={EYE_GLOW} strokeWidth={1} opacity={0.55} />
+      {/* brilho especular — o que faz ler como esfera, não como disco/bico */}
+      <ellipse
+        cx={cx - r * 0.32}
+        cy={cy - r * 0.36}
+        rx={r * 0.36}
+        ry={r * 0.24}
+        fill="#ffffff"
+        opacity={0.9}
+        transform={`rotate(-20 ${cx - r * 0.32} ${cy - r * 0.36})`}
+      />
+      <circle cx={cx + r * 0.34} cy={cy + r * 0.34} r={r * 0.1} fill="#ffffff" opacity={0.4} />
+      {/* anéis de comunicação quando falando */}
       {speaking && (
         <>
           <motion.circle
