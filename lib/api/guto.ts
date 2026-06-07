@@ -110,6 +110,8 @@ export interface GutoWorkoutPlan {
   lockedByCoach?: boolean
   updatedBy?: string
   updatedAt?: string
+  proactiveImpactId?: string
+  proactiveAdaptationMode?: ProactiveWorkoutEffect
 }
 
 export interface GutoExpectedResponse {
@@ -196,6 +198,8 @@ export interface GutoMemory {
   }[]
   lastLimitationCheckAt?: string
   lastWorkoutPlan?: GutoWorkoutPlan | null
+  proactiveMemories?: ProactiveMemory[]
+  proactiveImpacts?: ProactiveImpact[]
   dietGenerationStatus?: "idle" | "ready_to_generate" | "generating" | "generated" | "needs_clarification" | "failed"
   weeklyWorkoutPlan?: {
     studentId: string
@@ -543,6 +547,75 @@ export type ProactiveMemoryStatus =
 
 export type ProactiveValidationOutcome = "happened" | "postponed" | "discarded"
 
+export type ProactiveImpactSurface =
+  | "chat"
+  | "workout"
+  | "mission"
+  | "guto_online"
+  | "push"
+  | "xp"
+  | "arena"
+  | "path"
+  | "evolution"
+
+export type ProactiveImpactStatus = "active" | "superseded" | "discarded" | "validated"
+
+export type ProactiveDecisionReason =
+  | "health"
+  | "coach_lock"
+  | "travel"
+  | "commitment"
+  | "busy_week"
+  | "clear_week"
+
+export type ProactiveWorkoutEffect = "normal" | "short_light" | "minimal" | "ask_critical" | "coach_locked"
+export type ProactiveMissionEffect = "normal" | "reduced" | "protected_before" | "ask_critical" | "coach_locked"
+export type ProactiveBlockedPeriod = "morning" | "afternoon" | "evening" | "night" | "all_day"
+
+export interface ProactiveDecision {
+  id: string
+  memoryId: string
+  kind: "adapt_day" | "block_period" | "reduce_week" | "keep_normal" | "ask_critical" | "preserve_coach_lock"
+  reason: ProactiveDecisionReason
+  priority: number
+  affectedDates: string[]
+  blockedPeriod?: ProactiveBlockedPeriod
+  criticalQuestion?: "date" | "period" | "health_detail"
+  workoutEffect: ProactiveWorkoutEffect
+  missionEffect: ProactiveMissionEffect
+  message: string
+  createdAt: string
+}
+
+export interface ProactiveImpact {
+  id: string
+  memoryId: string
+  decision: ProactiveDecision
+  status: ProactiveImpactStatus
+  surfaces: ProactiveImpactSurface[]
+  priority: number
+  affectedDates: string[]
+  blockedPeriod?: ProactiveBlockedPeriod
+  workoutEffect: ProactiveWorkoutEffect
+  missionEffect: ProactiveMissionEffect
+  pushEffect: "none" | "avoid_blind_charge"
+  xpEffect: "none" | "no_free_xp_context_only"
+  arenaEffect: "none" | "validation_required"
+  pathEffect: "none" | "adapted_context"
+  evolutionEffect: "none" | "adapted_context"
+  supersededBy?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface GutoProactivityActionResult {
+  ok: boolean
+  memory?: ProactiveMemory
+  impact?: ProactiveImpact | null
+  memoryPatch?: Partial<GutoMemory>
+  ignored?: boolean
+}
+
 export type GutoProactiveMemoryAction =
   | { type: "confirm"; memoryId: string }
   | { type: "discard"; memoryId: string }
@@ -588,6 +661,7 @@ export interface ProactiveMemory {
   validatedAt?: string
   discardedAt?: string
   discardRequestedAt?: string
+  decision?: ProactiveDecision
   weatherFetchedAt?: string
 }
 
@@ -640,81 +714,83 @@ export async function getProactiveMemories(): Promise<ProactiveMemory[]> {
   }
 }
 
-export async function confirmProactiveMemory(memoryId: string): Promise<boolean> {
+const failedProactivityAction: GutoProactivityActionResult = { ok: false }
+
+export async function confirmProactiveMemory(memoryId: string): Promise<GutoProactivityActionResult> {
   try {
-    const result = await apiRequest<{ ok: boolean }>("/guto/proactivity/confirm", {
+    const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/confirm", {
       method: "POST",
       body: JSON.stringify({ memoryId }),
     })
-    return result.ok === true
+    return result
   } catch {
-    return false
+    return failedProactivityAction
   }
 }
 
-export async function discardProactiveMemory(memoryId: string): Promise<boolean> {
+export async function discardProactiveMemory(memoryId: string): Promise<GutoProactivityActionResult> {
   try {
-    const result = await apiRequest<{ ok: boolean }>("/guto/proactivity/discard", {
+    const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/discard", {
       method: "POST",
       body: JSON.stringify({ memoryId }),
     })
-    return result.ok === true
+    return result
   } catch {
-    return false
+    return failedProactivityAction
   }
 }
 
 export async function updateProactiveMemory(
   memoryId: string,
   patch: Partial<Pick<ProactiveMemory, "understood" | "dateText" | "dateParsed" | "location">>
-): Promise<boolean> {
+): Promise<GutoProactivityActionResult> {
   try {
-    const result = await apiRequest<{ ok: boolean }>("/guto/proactivity/update", {
+    const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/update", {
       method: "POST",
       body: JSON.stringify({ memoryId, patch }),
     })
-    return result.ok === true
+    return result
   } catch {
-    return false
+    return failedProactivityAction
   }
 }
 
 export async function validateProactiveMemory(
   memoryId: string,
   outcome: ProactiveValidationOutcome
-): Promise<boolean> {
+): Promise<GutoProactivityActionResult> {
   try {
-    const result = await apiRequest<{ ok: boolean }>("/guto/proactivity/validate", {
+    const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/validate", {
       method: "POST",
       body: JSON.stringify({ memoryId, outcome }),
     })
-    return result.ok === true
+    return result
   } catch {
-    return false
+    return failedProactivityAction
   }
 }
 
-export async function requestDiscardProactiveMemory(memoryId: string): Promise<boolean> {
+export async function requestDiscardProactiveMemory(memoryId: string): Promise<GutoProactivityActionResult> {
   try {
-    const result = await apiRequest<{ ok: boolean }>("/guto/proactivity/request-discard", {
+    const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/request-discard", {
       method: "POST",
       body: JSON.stringify({ memoryId }),
     })
-    return result.ok === true
+    return result
   } catch {
-    return false
+    return failedProactivityAction
   }
 }
 
-export async function cancelDiscardRequest(memoryId: string): Promise<boolean> {
+export async function cancelDiscardRequest(memoryId: string): Promise<GutoProactivityActionResult> {
   try {
-    const result = await apiRequest<{ ok: boolean }>("/guto/proactivity/cancel-discard-request", {
+    const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/cancel-discard-request", {
       method: "POST",
       body: JSON.stringify({ memoryId }),
     })
-    return result.ok === true
+    return result
   } catch {
-    return false
+    return failedProactivityAction
   }
 }
 

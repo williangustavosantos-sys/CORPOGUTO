@@ -30,6 +30,7 @@ import type {
   GutoExpectedResponse,
   GutoMemory,
   GutoProactiveMemoryAction,
+  GutoProactivityActionResult,
   GutoWorkoutPlan,
   ProactiveMemory,
 } from "@/lib/api/guto"
@@ -708,6 +709,15 @@ export function ChatTab({
     return cardMemories
   }, [])
 
+  const applyProactiveActionResult = useCallback(
+    (result?: GutoProactivityActionResult | null) => {
+      if (result?.memoryPatch && Object.keys(result.memoryPatch).length > 0) {
+        onMemoryPatch?.(result.memoryPatch)
+      }
+    },
+    [onMemoryPatch]
+  )
+
   // Botões Sim/Não do card de proatividade: resolve de forma determinística
   // (não depende do GUTO interpretar o chat). Remove o card na hora (otimista),
   // chama a API e reconcilia com o backend.
@@ -716,14 +726,16 @@ export function ChatTab({
       gutoAudio.playGutoFeedback("tap")
       setProactiveMemories((prev) => prev.filter((item) => item.id !== memoryId))
       try {
-        if (decision === "confirm") await confirmProactiveMemory(memoryId)
-        else await discardProactiveMemory(memoryId)
+        const result = decision === "confirm"
+          ? await confirmProactiveMemory(memoryId)
+          : await discardProactiveMemory(memoryId)
+        applyProactiveActionResult(result)
       } catch {
         // silencioso — o refresh abaixo reflete o estado real do backend
       }
       await refreshProactiveMemories()
     },
-    [refreshProactiveMemories]
+    [applyProactiveActionResult, refreshProactiveMemories]
   )
 
   const triggerProactivityExtraction = useCallback(
@@ -758,25 +770,26 @@ export function ChatTab({
       markProcessedProactivityAction(storageKey)
 
       try {
-        let ok = false
+        let result: GutoProactivityActionResult = { ok: false }
         if (action.type === "confirm") {
-          ok = await confirmProactiveMemory(action.memoryId)
+          result = await confirmProactiveMemory(action.memoryId)
         } else if (action.type === "discard") {
-          ok = await discardProactiveMemory(action.memoryId)
+          result = await discardProactiveMemory(action.memoryId)
         } else if (action.type === "request_discard") {
-          ok = await requestDiscardProactiveMemory(action.memoryId)
+          result = await requestDiscardProactiveMemory(action.memoryId)
         } else if (action.type === "cancel_discard_request") {
-          ok = await cancelDiscardRequest(action.memoryId)
+          result = await cancelDiscardRequest(action.memoryId)
         } else if (action.type === "update") {
-          ok = await updateProactiveMemory(action.memoryId, action.patch)
+          result = await updateProactiveMemory(action.memoryId, action.patch)
         } else {
-          ok = await validateProactiveMemory(action.memoryId, action.outcome)
+          result = await validateProactiveMemory(action.memoryId, action.outcome)
         }
 
-        if (!ok) {
+        if (!result.ok) {
           processedProactiveActionKeysRef.current.delete(storageKey)
           clearProcessedProactivityAction(storageKey)
         } else {
+          applyProactiveActionResult(result)
           await refreshProactiveMemories()
         }
       } catch {
@@ -784,7 +797,7 @@ export function ChatTab({
         clearProcessedProactivityAction(storageKey)
       }
     },
-    [refreshProactiveMemories, userId]
+    [applyProactiveActionResult, refreshProactiveMemories, userId]
   )
 
   useEffect(() => {
