@@ -56,10 +56,7 @@ interface GutoVividAvatarProps {
 const EYE_COLOR = "#52e7ff" // --guto-cyan
 const EYE_DARK = "#1ec1de" // ciano profundo (gradiente do app)
 const EYE_GLOW = "#7df0ff" // ciano brilho (gradiente do app)
-const BROW = "#5aa6c2" // traço suave azul-acinzentado
 const BLUSH = "#ff9fb6"
-const HAIR = "#7fceea" // contorno do cabelo branco (visível no fundo claro do app)
-const HAIR_FILL = "#f2fbff"
 
 // Mesmos tamanhos do avatar oficial (drop-in futuro).
 const sizeClasses: Record<GutoVividSize, string> = {
@@ -111,12 +108,11 @@ const MOODS: Record<GutoVividEmotion, Mood> = {
   },
 }
 
-// ── Metadados por fase (posições derivadas dos desenhos enviados) ───────────
+// ── Metadados por fase (silhuetas fofas distintas; olhos grandes p/ carisma) ──
 type StageMeta = {
   view: [number, number]
   eyes: { lx: number; rx: number; cy: number; r: number }
   core: { cx: number; cy: number; r: number }
-  browY: number | null // null = fase sem sobrancelha (baby)
   ground: number // y do chão (origem da respiração)
 }
 
@@ -125,29 +121,25 @@ const STAGE_META: Record<GutoVividStage, StageMeta> = {
     view: [160, 160],
     eyes: { lx: 57, rx: 103, cy: 72, r: 16 },
     core: { cx: 80, cy: 112, r: 13 },
-    browY: null,
     ground: 154,
   },
   teen: {
-    view: [180, 230],
-    eyes: { lx: 67, rx: 113, cy: 78, r: 17 },
-    core: { cx: 90, cy: 148, r: 17 },
-    browY: 52,
-    ground: 222,
+    view: [170, 200],
+    eyes: { lx: 63, rx: 107, cy: 100, r: 18 },
+    core: { cx: 85, cy: 134, r: 13 },
+    ground: 192,
   },
   adult: {
-    view: [200, 260],
-    eyes: { lx: 75, rx: 125, cy: 84, r: 19 },
-    core: { cx: 100, cy: 162, r: 20 },
-    browY: 56,
-    ground: 252,
+    view: [220, 210],
+    eyes: { lx: 82, rx: 138, cy: 104, r: 20 },
+    core: { cx: 110, cy: 150, r: 17 },
+    ground: 202,
   },
   elite: {
-    view: [220, 290],
-    eyes: { lx: 82, rx: 138, cy: 84, r: 20 },
-    core: { cx: 110, cy: 168, r: 24 },
-    browY: 58,
-    ground: 284,
+    view: [220, 240],
+    eyes: { lx: 85, rx: 135, cy: 122, r: 20 },
+    core: { cx: 110, cy: 162, r: 18 },
+    ground: 230,
   },
 }
 
@@ -243,52 +235,23 @@ function Eyes({
   )
 }
 
-function Brows({
-  lx,
-  rx,
-  y,
-  r,
-  emotion,
-  dy,
-}: {
-  lx: number
-  rx: number
-  y: number
-  r: number
-  emotion: GutoVividEmotion
-  dy: number
-}) {
-  // Forma das sobrancelhas por emoção. Cada lado é um traço curto.
-  const w = r * 0.95
-  let left: string
-  let right: string
-  if (emotion === "super") {
-    // bravo: cantos internos para baixo (V)
-    left = `M ${lx - w} ${y - 3} Q ${lx} ${y + 3} ${lx + w} ${y + 4}`
-    right = `M ${rx - w} ${y + 4} Q ${rx} ${y + 3} ${rx + w} ${y - 3}`
-  } else if (emotion === "critical") {
-    // preocupado: cantos internos para cima
-    left = `M ${lx - w} ${y + 4} Q ${lx} ${y - 2} ${lx + w} ${y + 1}`
-    right = `M ${rx - w} ${y + 1} Q ${rx} ${y - 2} ${rx + w} ${y + 4}`
-  } else if (emotion === "alert") {
-    // surpreso: arqueado para cima
-    left = `M ${lx - w} ${y + 1} Q ${lx} ${y - 6} ${lx + w} ${y}`
-    right = `M ${rx - w} ${y} Q ${rx} ${y - 6} ${rx + w} ${y + 1}`
-  } else {
-    // neutro/feliz
-    left = `M ${lx - w} ${y + 1} Q ${lx} ${y - 3} ${lx + w} ${y}`
-    right = `M ${rx - w} ${y} Q ${rx} ${y - 3} ${rx + w} ${y + 1}`
-  }
+// Brilhos fofos (4 pontas) que cintilam — usados no elite/reward p/ carisma.
+function Sparkles({ pts, color }: { pts: Array<[number, number, number]>; color: string }) {
   return (
-    <g
-      transform={`translate(0 ${dy})`}
-      stroke={BROW}
-      strokeWidth={r * 0.16}
-      strokeLinecap="round"
-      fill="none"
-    >
-      <path d={left} />
-      <path d={right} />
+    <g>
+      {pts.map(([x, y, s], i) => (
+        <motion.g
+          key={i}
+          style={{ transformOrigin: `${x}px ${y}px`, transformBox: "view-box" }}
+          animate={{ opacity: [0.15, 1, 0.15], scale: [0.6, 1.1, 0.6] }}
+          transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut", delay: i * 0.45 }}
+        >
+          <path
+            d={`M ${x} ${y - s} L ${x + s * 0.3} ${y - s * 0.3} L ${x + s} ${y} L ${x + s * 0.3} ${y + s * 0.3} L ${x} ${y + s} L ${x - s * 0.3} ${y + s * 0.3} L ${x - s} ${y} L ${x - s * 0.3} ${y - s * 0.3} Z`}
+            fill={color}
+          />
+        </motion.g>
+      ))}
     </g>
   )
 }
@@ -408,186 +371,127 @@ function BabyArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: b
   )
 }
 
-function TeenArt({
-  uid,
-  mood,
-  emotion,
-  speaking,
-}: {
-  uid: string
-  mood: Mood
-  emotion: GutoVividEmotion
-  speaking: boolean
-}) {
+function TeenArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: boolean }) {
   const m = STAGE_META.teen
   return (
     <>
-      <Defs uid={uid} body={["#ffffff", "#e4f6ff", "#c9ecfb"]} />
-      <Aura uid={uid} cx={90} cy={120} r={92} intensity={mood.aura} dur={mood.coreDur * 1.6} />
-      <ellipse cx={90} cy={225} rx={44} ry={6} fill="rgba(20,90,130,0.13)" />
-      {/* moicano (contorno ciano p/ destacar do corpo branco) */}
-      <path d="M 78 28 Q 82 8 90 4 Q 98 8 102 28 Q 96 20 90 22 Q 84 20 78 28 Z" fill={HAIR_FILL} stroke={HAIR} strokeWidth={1.6} strokeLinejoin="round" />
-      <path d="M 70 34 Q 76 12 86 8 Q 80 20 78 28 Z" fill={HAIR_FILL} stroke={HAIR} strokeWidth={1.3} strokeLinejoin="round" />
-      <path d="M 110 34 Q 104 12 94 8 Q 100 20 102 28 Z" fill={HAIR_FILL} stroke={HAIR} strokeWidth={1.3} strokeLinejoin="round" />
-      <path d="M 64 40 Q 67 22 75 16 Q 72 28 70 34 Z" fill="#f7fdff" stroke={HAIR} strokeWidth={1.1} strokeLinejoin="round" />
-      <path d="M 116 40 Q 113 22 105 16 Q 108 28 110 34 Z" fill="#f7fdff" stroke={HAIR} strokeWidth={1.1} strokeLinejoin="round" />
-      {/* pernas */}
-      <rect x={60} y={194} width={24} height={28} rx={10} fill="#cdeefb" />
-      <rect x={96} y={194} width={24} height={28} rx={10} fill="#cdeefb" />
-      {/* corpo */}
-      <ellipse cx={90} cy={158} rx={52} ry={46} fill={`url(#${uid}-body)`} />
-      <path d="M 65 155 Q 90 162 115 155" stroke="#a9def2" strokeWidth={1.5} fill="none" />
-      <path d="M 68 168 Q 90 173 112 168" stroke="#a9def2" strokeWidth={1} fill="none" />
-      {/* braços */}
-      <ellipse cx={34} cy={155} rx={14} ry={26} fill={`url(#${uid}-body)`} transform="rotate(6 34 155)" />
-      <ellipse cx={146} cy={155} rx={14} ry={26} fill={`url(#${uid}-body)`} transform="rotate(-6 146 155)" />
-      <ellipse cx={30} cy={175} rx={11} ry={10} fill={`url(#${uid}-body)`} />
-      <ellipse cx={150} cy={175} rx={11} ry={10} fill={`url(#${uid}-body)`} />
-      <circle cx={44} cy={140} r={8} fill="#cdeefb" />
-      <circle cx={136} cy={140} r={8} fill="#cdeefb" />
-      <ChestCore uid={uid} cx={m.core.cx} cy={m.core.cy} r={m.core.r} mood={mood} speaking={speaking} />
-      {/* pescoço + cabeça */}
-      <rect x={74} y={100} width={32} height={16} rx={7} fill="#d8f2fc" />
-      <ellipse cx={90} cy={82} rx={54} ry={52} fill={`url(#${uid}-body)`} />
-      <ellipse cx={65} cy={56} rx={20} ry={12} fill="#ffffff" opacity={0.25} transform="rotate(-25 65 56)" />
-      <circle cx={37} cy={82} r={8} fill="#cdeefb" />
-      <circle cx={37} cy={82} r={5} fill="#a9def2" />
-      <circle cx={143} cy={82} r={8} fill="#cdeefb" />
-      <circle cx={143} cy={82} r={5} fill="#a9def2" />
-      <ellipse cx={44} cy={92} rx={9} ry={5} fill={BLUSH} opacity={0.25} />
-      <ellipse cx={136} cy={92} rx={9} ry={5} fill={BLUSH} opacity={0.25} />
-      {m.browY !== null && (
-        <Brows lx={m.eyes.lx} rx={m.eyes.rx} y={m.browY} r={m.eyes.r} emotion={emotion} dy={mood.browDy} />
-      )}
+      <Defs uid={uid} body={["#ffffff", "#eaf9ff", "#cfeeff"]} />
+      <Aura uid={uid} cx={85} cy={106} r={84} intensity={mood.aura} dur={mood.coreDur * 1.6} />
+      <ellipse cx={85} cy={192} rx={40} ry={6} fill="rgba(20,90,130,0.12)" />
+
+      {/* antena fofa com ponta brilhante */}
+      <path d="M 85 64 Q 76 44 92 34" fill="none" stroke="#bfe9fb" strokeWidth={5} strokeLinecap="round" />
+      <circle cx={93} cy={32} r={6} fill={EYE_COLOR} filter={`url(#${uid}-glow)`} />
+      <circle cx={93} cy={32} r={3} fill="#ffffff" />
+
+      {/* perninhas */}
+      <rect x={66} y={166} width={18} height={28} rx={9} fill="#d6f3ff" />
+      <rect x={86} y={166} width={18} height={28} rx={9} fill="#d6f3ff" />
+
+      {/* bracinhos levantados (energético) */}
+      <ellipse cx={36} cy={112} rx={12} ry={22} fill={`url(#${uid}-body)`} transform="rotate(-22 36 112)" />
+      <ellipse cx={134} cy={112} rx={12} ry={22} fill={`url(#${uid}-body)`} transform="rotate(22 134 112)" />
+      <circle cx={29} cy={94} r={9} fill={`url(#${uid}-body)`} />
+      <circle cx={141} cy={94} r={9} fill={`url(#${uid}-body)`} />
+
+      {/* corpo (ovo) */}
+      <ellipse cx={85} cy={116} rx={50} ry={56} fill={`url(#${uid}-body)`} />
+      <ellipse cx={85} cy={116} rx={50} ry={56} fill="none" stroke="#bfe9fb" strokeWidth={1.5} opacity={0.6} />
+      <ellipse cx={64} cy={88} rx={16} ry={10} fill="#ffffff" opacity={0.45} transform="rotate(-20 64 88)" />
+
+      {/* blush */}
+      <ellipse cx={56} cy={120} rx={10} ry={6} fill={BLUSH} opacity={0.34} />
+      <ellipse cx={114} cy={120} rx={10} ry={6} fill={BLUSH} opacity={0.34} />
+
       <Eyes uid={uid} lx={m.eyes.lx} rx={m.eyes.rx} cy={m.eyes.cy} r={m.eyes.r} mood={mood} />
+      <ChestCore uid={uid} cx={m.core.cx} cy={m.core.cy} r={m.core.r} mood={mood} speaking={speaking} />
     </>
   )
 }
 
-function AdultArt({
-  uid,
-  mood,
-  emotion,
-  speaking,
-}: {
-  uid: string
-  mood: Mood
-  emotion: GutoVividEmotion
-  speaking: boolean
-}) {
+function AdultArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: boolean }) {
   const m = STAGE_META.adult
   return (
     <>
-      <Defs uid={uid} body={["#f4fcff", "#dcf3ff", "#bfe7fa"]} />
-      <Aura uid={uid} cx={100} cy={130} r={104} intensity={mood.aura} dur={mood.coreDur * 1.6} />
-      <ellipse cx={100} cy={255} rx={52} ry={7} fill="rgba(20,90,130,0.14)" />
-      {/* cabelo chamas (contorno ciano p/ destacar do corpo branco) */}
-      <path d="M 82 28 Q 88 2 100 -2 Q 112 2 118 28 Q 106 14 100 18 Q 94 14 82 28 Z" fill={HAIR_FILL} stroke={HAIR} strokeWidth={1.7} strokeLinejoin="round" />
-      <path d="M 70 36 Q 78 6 94 2 Q 86 18 82 28 Z" fill={HAIR_FILL} stroke={HAIR} strokeWidth={1.3} strokeLinejoin="round" />
-      <path d="M 130 36 Q 122 6 106 2 Q 114 18 118 28 Z" fill={HAIR_FILL} stroke={HAIR} strokeWidth={1.3} strokeLinejoin="round" />
-      <path d="M 60 44 Q 64 18 76 12 Q 72 28 70 36 Z" fill="#f7fdff" stroke={HAIR} strokeWidth={1.1} strokeLinejoin="round" />
-      <path d="M 140 44 Q 136 18 124 12 Q 128 28 130 36 Z" fill="#f7fdff" stroke={HAIR} strokeWidth={1.1} strokeLinejoin="round" />
-      {/* pernas + botas */}
-      <rect x={62} y={216} width={30} height={36} rx={12} fill="#bfe4f6" />
-      <rect x={108} y={216} width={30} height={36} rx={12} fill="#bfe4f6" />
-      <rect x={60} y={240} width={34} height={12} rx={6} fill="#a6d6ee" />
-      <rect x={106} y={240} width={34} height={12} rx={6} fill="#a6d6ee" />
-      {/* corpo */}
-      <ellipse cx={100} cy={172} rx={64} ry={54} fill={`url(#${uid}-body)`} />
-      <path d="M 70 160 L 65 148 L 78 142 L 91 148 L 91 160 L 78 166 Z" fill="#d5effb" opacity={0.7} />
-      <path d="M 130 160 L 135 148 L 122 142 L 109 148 L 109 160 L 122 166 Z" fill="#d5effb" opacity={0.7} />
-      <path d="M 70 160 Q 100 170 130 160" stroke="#8fd2ee" strokeWidth={2} fill="none" />
-      <path d="M 74 175 Q 100 183 126 175" stroke="#8fd2ee" strokeWidth={1.5} fill="none" />
-      <path d="M 78 188 Q 100 194 122 188" stroke="#8fd2ee" strokeWidth={1} fill="none" />
-      {/* braços fortes */}
-      <ellipse cx={28} cy={168} rx={18} ry={32} fill={`url(#${uid}-body)`} transform="rotate(5 28 168)" />
-      <ellipse cx={172} cy={168} rx={18} ry={32} fill={`url(#${uid}-body)`} transform="rotate(-5 172 168)" />
-      <ellipse cx={24} cy={195} rx={15} ry={13} fill={`url(#${uid}-body)`} />
-      <ellipse cx={176} cy={195} rx={15} ry={13} fill={`url(#${uid}-body)`} />
-      <ellipse cx={46} cy={150} rx={12} ry={9} fill="#d5effb" transform="rotate(-10 46 150)" />
-      <ellipse cx={154} cy={150} rx={12} ry={9} fill="#d5effb" transform="rotate(10 154 150)" />
-      <ChestCore uid={uid} cx={m.core.cx} cy={m.core.cy} r={m.core.r} mood={mood} speaking={speaking} />
-      {/* pescoço + cabeça */}
-      <rect x={82} y={108} width={36} height={18} rx={8} fill="#d3edfa" />
-      <ellipse cx={100} cy={88} rx={60} ry={58} fill={`url(#${uid}-body)`} />
-      <ellipse cx={72} cy={60} rx={22} ry={13} fill="#ffffff" opacity={0.22} transform="rotate(-25 72 60)" />
-      <circle cx={41} cy={88} r={10} fill="#cdeefb" />
-      <circle cx={41} cy={88} r={6} fill="#a9def2" />
-      <circle cx={159} cy={88} r={10} fill="#cdeefb" />
-      <circle cx={159} cy={88} r={6} fill="#a9def2" />
-      {m.browY !== null && (
-        <Brows lx={m.eyes.lx} rx={m.eyes.rx} y={m.browY} r={m.eyes.r} emotion={emotion} dy={mood.browDy} />
-      )}
+      <Defs uid={uid} body={["#ffffff", "#e6f6ff", "#c4ebfb"]} />
+      <Aura uid={uid} cx={110} cy={124} r={98} intensity={mood.aura} dur={mood.coreDur * 1.6} />
+      <ellipse cx={110} cy={202} rx={56} ry={7} fill="rgba(20,90,130,0.13)" />
+
+      {/* perninhas curtas e firmes */}
+      <rect x={80} y={176} width={24} height={28} rx={11} fill="#cfeefb" />
+      <rect x={116} y={176} width={24} height={28} rx={11} fill="#cfeefb" />
+
+      {/* braços + mãos-luva grandes (forte, mas fofo) */}
+      <ellipse cx={44} cy={138} rx={14} ry={20} fill={`url(#${uid}-body)`} transform="rotate(8 44 138)" />
+      <ellipse cx={176} cy={138} rx={14} ry={20} fill={`url(#${uid}-body)`} transform="rotate(-8 176 138)" />
+      <circle cx={30} cy={154} r={18} fill={`url(#${uid}-body)`} />
+      <circle cx={190} cy={154} r={18} fill={`url(#${uid}-body)`} />
+      <circle cx={30} cy={154} r={18} fill="none" stroke="#bfe9fb" strokeWidth={1.3} opacity={0.6} />
+      <circle cx={190} cy={154} r={18} fill="none" stroke="#bfe9fb" strokeWidth={1.3} opacity={0.6} />
+
+      {/* corpo largo e fofo */}
+      <ellipse cx={110} cy={124} rx={74} ry={60} fill={`url(#${uid}-body)`} />
+      <ellipse cx={110} cy={124} rx={74} ry={60} fill="none" stroke="#bfe9fb" strokeWidth={1.5} opacity={0.6} />
+      <ellipse cx={82} cy={92} rx={22} ry={12} fill="#ffffff" opacity={0.4} transform="rotate(-20 82 92)" />
+
+      {/* blush */}
+      <ellipse cx={70} cy={132} rx={11} ry={6.5} fill={BLUSH} opacity={0.32} />
+      <ellipse cx={150} cy={132} rx={11} ry={6.5} fill={BLUSH} opacity={0.32} />
+
       <Eyes uid={uid} lx={m.eyes.lx} rx={m.eyes.rx} cy={m.eyes.cy} r={m.eyes.r} mood={mood} />
-      {/* bigode */}
-      <path d="M 82 106 Q 90 110 100 108" stroke={BROW} strokeWidth={2.5} fill="none" strokeLinecap="round" />
-      <path d="M 118 106 Q 110 110 100 108" stroke={BROW} strokeWidth={2.5} fill="none" strokeLinecap="round" />
-      <circle cx={100} cy={108} r={2} fill={BROW} />
+      <ChestCore uid={uid} cx={m.core.cx} cy={m.core.cy} r={m.core.r} mood={mood} speaking={speaking} />
     </>
   )
 }
 
-function EliteArt({
-  uid,
-  mood,
-  emotion,
-  speaking,
-}: {
-  uid: string
-  mood: Mood
-  emotion: GutoVividEmotion
-  speaking: boolean
-}) {
+function EliteArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: boolean }) {
   const m = STAGE_META.elite
   return (
     <>
-      <Defs uid={uid} body={["#dff8ff", "#9fe4ff", "#3fb9da"]} />
-      <Aura uid={uid} cx={110} cy={150} r={120} intensity={Math.max(mood.aura, 0.4)} dur={mood.coreDur * 1.6} />
-      <ellipse cx={110} cy={284} rx={60} ry={8} fill="rgba(15,80,120,0.2)" />
-      {/* capa */}
-      <path d="M 55 155 Q 30 195 38 240 Q 70 232 110 238 Q 150 232 182 240 Q 190 195 165 155 Z" fill="#2f9ec0" />
-      <path d="M 70 160 Q 55 190 60 225 Q 85 220 110 224 Q 135 220 160 225 Q 165 190 150 160 Z" fill="#3fb9da" opacity={0.5} />
-      <path d="M 110 160 L 110 235" stroke="#7df0ff" strokeWidth={1} opacity={0.4} />
-      {/* pernas */}
-      <rect x={70} y={228} width={30} height={42} rx={10} fill="#2f9ec0" />
-      <rect x={120} y={228} width={30} height={42} rx={10} fill="#2f9ec0" />
-      <rect x={68} y={228} width={34} height={42} rx={10} fill="none" stroke={EYE_COLOR} strokeWidth={1.5} opacity={0.7} />
-      <rect x={118} y={228} width={34} height={42} rx={10} fill="none" stroke={EYE_COLOR} strokeWidth={1.5} opacity={0.7} />
-      <rect x={68} y={256} width={34} height={14} rx={6} fill="#3fb9da" />
-      <rect x={118} y={256} width={34} height={14} rx={6} fill="#3fb9da" />
-      {/* corpo armadura */}
-      <ellipse cx={110} cy={178} rx={66} ry={56} fill={`url(#${uid}-body)`} />
-      <ellipse cx={110} cy={178} rx={66} ry={56} fill="none" stroke={EYE_COLOR} strokeWidth={1.5} opacity={0.5} />
-      <path d="M 78 168 L 72 154 L 88 148 L 104 154 L 104 168 L 88 176 Z" fill="#5fcfee" opacity={0.85} />
-      <path d="M 142 168 L 148 154 L 132 148 L 116 154 L 116 168 L 132 176 Z" fill="#5fcfee" opacity={0.85} />
-      <path d="M 80 185 Q 110 193 140 185" stroke={EYE_COLOR} strokeWidth={2} fill="none" opacity={0.8} />
-      <path d="M 84 198 Q 110 205 136 198" stroke={EYE_COLOR} strokeWidth={1.5} fill="none" opacity={0.6} />
-      {/* braços */}
-      <ellipse cx={34} cy={175} rx={20} ry={36} fill={`url(#${uid}-body)`} transform="rotate(5 34 175)" />
-      <ellipse cx={186} cy={175} rx={20} ry={36} fill={`url(#${uid}-body)`} transform="rotate(-5 186 175)" />
-      <ellipse cx={28} cy={206} rx={17} ry={15} fill="#2f9ec0" />
-      <ellipse cx={192} cy={206} rx={17} ry={15} fill="#2f9ec0" />
-      <path d="M 46 148 Q 56 138 68 144 Q 60 152 52 158 Z" fill="#5fcfee" />
-      <path d="M 174 148 Q 164 138 152 144 Q 160 152 168 158 Z" fill="#5fcfee" />
-      <ChestCore uid={uid} cx={m.core.cx} cy={m.core.cy} r={m.core.r} mood={mood} speaking={speaking} />
-      {/* pescoço + capacete */}
-      <rect x={92} y={108} width={36} height={20} rx={8} fill="#2f9ec0" />
-      <ellipse cx={110} cy={88} rx={62} ry={60} fill={`url(#${uid}-body)`} />
-      <ellipse cx={110} cy={88} rx={62} ry={60} fill="none" stroke={EYE_COLOR} strokeWidth={1.5} opacity={0.6} />
-      <ellipse cx={49} cy={88} rx={12} ry={14} fill="#2f9ec0" />
-      <circle cx={49} cy={88} r={5} fill={EYE_COLOR} opacity={0.85} />
-      <ellipse cx={171} cy={88} rx={12} ry={14} fill="#2f9ec0" />
-      <circle cx={171} cy={88} r={5} fill={EYE_COLOR} opacity={0.85} />
-      {/* chamas azuis */}
-      <path d="M 90 26 Q 96 2 110 -4 Q 124 2 130 26 Q 118 10 110 14 Q 102 10 90 26 Z" fill={EYE_GLOW} filter={`url(#${uid}-glow)`} opacity={0.7} />
-      <path d="M 90 26 Q 96 2 110 -4 Q 124 2 130 26 Q 118 10 110 14 Q 102 10 90 26 Z" fill={EYE_COLOR} />
-      <path d="M 76 34 Q 84 4 100 0 Q 92 18 90 26 Z" fill={EYE_GLOW} opacity={0.9} />
-      <path d="M 144 34 Q 136 4 120 0 Q 128 18 130 26 Z" fill={EYE_GLOW} opacity={0.9} />
-      <polygon points="110,-2 115,10 110,8 105,10" fill="#dffaff" />
-      {m.browY !== null && (
-        <Brows lx={m.eyes.lx} rx={m.eyes.rx} y={m.browY} r={m.eyes.r} emotion={emotion} dy={mood.browDy} />
-      )}
+      <Defs uid={uid} body={["#eafdff", "#bdf0ff", "#74d8f2"]} />
+      <Aura uid={uid} cx={110} cy={140} r={112} intensity={Math.max(mood.aura, 0.5)} dur={mood.coreDur * 1.5} />
+      <ellipse cx={110} cy={230} rx={56} ry={8} fill="rgba(15,80,120,0.18)" />
+
+      {/* capinha fofa (atrás do corpo) */}
+      <path d="M 72 118 Q 40 168 54 220 Q 110 206 166 220 Q 180 168 148 118 Z" fill="#49c1e6" />
+      <path d="M 84 122 Q 60 162 70 206 Q 110 196 150 206 Q 160 162 136 122 Z" fill="#7fdcff" opacity={0.55} />
+
+      {/* perninhas */}
+      <rect x={86} y={190} width={22} height={28} rx={10} fill={`url(#${uid}-body)`} />
+      <rect x={112} y={190} width={22} height={28} rx={10} fill={`url(#${uid}-body)`} />
+
+      {/* bracinhos */}
+      <ellipse cx={50} cy={150} rx={13} ry={24} fill={`url(#${uid}-body)`} transform="rotate(8 50 150)" />
+      <ellipse cx={170} cy={150} rx={13} ry={24} fill={`url(#${uid}-body)`} transform="rotate(-8 170 150)" />
+      <circle cx={45} cy={174} r={11} fill={`url(#${uid}-body)`} />
+      <circle cx={175} cy={174} r={11} fill={`url(#${uid}-body)`} />
+
+      {/* corpo */}
+      <ellipse cx={110} cy={140} rx={56} ry={58} fill={`url(#${uid}-body)`} />
+      <ellipse cx={110} cy={140} rx={56} ry={58} fill="none" stroke={EYE_COLOR} strokeWidth={1.5} opacity={0.5} />
+      <ellipse cx={90} cy={114} rx={18} ry={11} fill="#ffffff" opacity={0.4} transform="rotate(-20 90 114)" />
+
+      {/* blush */}
+      <ellipse cx={82} cy={146} rx={10} ry={6} fill={BLUSH} opacity={0.3} />
+      <ellipse cx={138} cy={146} rx={10} ry={6} fill={BLUSH} opacity={0.3} />
+
       <Eyes uid={uid} lx={m.eyes.lx} rx={m.eyes.rx} cy={m.eyes.cy} r={m.eyes.r} mood={mood} />
+      <ChestCore uid={uid} cx={m.core.cx} cy={m.core.cy} r={m.core.r} mood={mood} speaking={speaking} />
+
+      {/* coroa flutuante fofa */}
+      <g filter={`url(#${uid}-glow)`}>
+        <path
+          d="M 92 80 L 92 62 L 102 72 L 110 58 L 118 72 L 128 62 L 128 80 Z"
+          fill={EYE_GLOW}
+          stroke={EYE_COLOR}
+          strokeWidth={1.5}
+          strokeLinejoin="round"
+        />
+        <circle cx={110} cy={58} r={3} fill="#ffffff" />
+      </g>
+
+      {/* brilhos */}
+      <Sparkles pts={[[52, 96, 6], [168, 100, 5], [110, 44, 5]]} color={EYE_GLOW} />
     </>
   )
 }
@@ -616,11 +520,11 @@ export function GutoVividAvatar({
       case "baby":
         return <BabyArt uid={uid} mood={mood} speaking={isSpeaking} />
       case "teen":
-        return <TeenArt uid={uid} mood={mood} emotion={emotion} speaking={isSpeaking} />
+        return <TeenArt uid={uid} mood={mood} speaking={isSpeaking} />
       case "adult":
-        return <AdultArt uid={uid} mood={mood} emotion={emotion} speaking={isSpeaking} />
+        return <AdultArt uid={uid} mood={mood} speaking={isSpeaking} />
       case "elite":
-        return <EliteArt uid={uid} mood={mood} emotion={emotion} speaking={isSpeaking} />
+        return <EliteArt uid={uid} mood={mood} speaking={isSpeaking} />
     }
   })()
 
