@@ -1452,25 +1452,26 @@ export function ChatTab({
   )
   const showProactiveBanner =
     !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories)
-  // Com o teclado aberto, o input PRECISA ficar fixo no rodapé (logo acima do
-  // teclado). Os offsets do banner/contextChip são só pro layout flutuante sem
-  // teclado; mantê-los com o teclado aberto jogava o input pro meio da tela,
-  // sobrepondo a mensagem do GUTO (bug iOS reportado). Por isso, fixa no rodapé.
-  const inputStackBottom = isKeyboardOpen
-    ? "var(--guto-chat-input-bottom)"
-    : showProactiveBanner
-      ? contextChip
-        ? "calc(var(--guto-chat-input-bottom) + 7.75rem)"
-        : "calc(var(--guto-chat-input-bottom) + 4.75rem)"
-      : contextChip
-        ? "calc(var(--guto-chat-input-bottom) + 4.25rem)"
-        : "var(--guto-chat-input-bottom)"
   const inputPlaceholder =
     contextChip?.type === "exercise"
       ? copy.exerciseInputPlaceholder
       : contextChip?.type === "meal"
         ? copy.mealInputPlaceholder
         : locale.placeholder
+
+  // Dock inferior (banner proativo + context chip + input) empilhado e ancorado
+  // no rodapé. Medimos a altura pra a lista de mensagens nunca ficar atrás dele.
+  const dockRef = useRef<HTMLDivElement>(null)
+  const [dockHeight, setDockHeight] = useState(72)
+  useEffect(() => {
+    const el = dockRef.current
+    if (!el) return
+    const update = () => setDockHeight(el.offsetHeight)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   return (
     <div className="guto-chat-stage relative h-full min-h-0 overflow-hidden">
@@ -1606,7 +1607,8 @@ export function ChatTab({
       {/* Mensagens — z-30 flutua sobre o avatar/cápsula como camada holográfica */}
       <div
         ref={scrollRef}
-        className="guto-chat-list absolute left-0 right-0 top-[54%] bottom-[calc(var(--guto-chat-input-bottom)+72px)] z-30 overflow-y-auto px-5 pb-3"
+        className="guto-chat-list absolute left-0 right-0 top-[54%] z-30 overflow-y-auto px-5 pb-3"
+        style={{ bottom: `calc(var(--guto-chat-input-bottom) + ${dockHeight + 16}px)` }}
       >
         <motion.div className="flex min-h-full flex-col justify-end gap-3">
           {visibleMessages.map((message) => (
@@ -1632,11 +1634,19 @@ export function ChatTab({
         </motion.div>
       </div>
 
-      {showProactiveBanner && (
+      {/* Dock inferior: banner proativo + context chip + input, empilhados e
+          ancorados no rodapé. Nada se sobrepõe e a lista de mensagens (acima)
+          mede a altura deste dock pra nunca ficar atrás dele. */}
+      <div
+        ref={dockRef}
+        className="absolute left-[8.46%] z-50 flex w-[81.34%] flex-col gap-2"
+        style={{ bottom: "var(--guto-chat-input-bottom)" }}
+      >
+      {showProactiveBanner && !isKeyboardOpen && (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
-          className="absolute left-[8.46%] z-[60] max-h-[42vh] w-[81.34%] overflow-y-auto bottom-[calc(var(--guto-chat-input-bottom)+4.75rem)] rounded-[16px] border border-[rgba(82,231,255,0.4)] bg-white/95 px-3 py-2 shadow-[0_8px_24px_rgba(82,231,255,0.18)]"
+          className="max-h-[42vh] w-full overflow-y-auto rounded-[16px] border border-[rgba(82,231,255,0.4)] bg-white/95 px-3 py-2 shadow-[0_8px_24px_rgba(82,231,255,0.18)]"
         >
           <p className="mb-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[rgba(13,35,65,0.55)]">
             {actionableProactive.pendingConfirmation.length > 0
@@ -1701,12 +1711,9 @@ export function ChatTab({
 
       {contextChip && (
         <motion.div
-          className="absolute left-[8.46%] z-50 flex w-[81.34%] items-center justify-between gap-2 rounded-full border border-[rgba(82,231,255,0.45)] bg-white/90 px-3 py-1.5 shadow-[0_8px_24px_rgba(82,231,255,0.12)]"
-          style={{
-            bottom: showProactiveBanner
-              ? "calc(var(--guto-chat-input-bottom) + 7.75rem)"
-              : "calc(var(--guto-chat-input-bottom) + 4.25rem)",
-          }}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex w-full items-center justify-between gap-2 rounded-full border border-[rgba(82,231,255,0.45)] bg-white/90 px-3 py-1.5 shadow-[0_8px_24px_rgba(82,231,255,0.12)]"
         >
           <span className="min-w-0 truncate font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-navy)">
             {contextChip.type === "exercise" ? "?" : "🍽"} {contextChip.label}
@@ -1724,8 +1731,8 @@ export function ChatTab({
         </motion.div>
       )}
 
-      <div className="absolute left-[8.46%] z-50 h-[58px] w-[81.34%]" style={{ bottom: inputStackBottom }}>
-        <div className="guto-chat-input h-full rounded-[18px] px-3 py-2">
+      <div className="w-full">
+        <div className="guto-chat-input h-[58px] rounded-[18px] px-3 py-2">
           <div className="flex h-[42px] items-center gap-3">
             <motion.button
               type="button"
@@ -1775,10 +1782,11 @@ export function ChatTab({
         </div>
 
         {isSpeaking && !isMuted && (
-          <div className="mt-2 text-center font-mono text-[9px] uppercase tracking-normal text-(--guto-cyan)">
+          <div className="mt-1 text-center font-mono text-[9px] uppercase tracking-normal text-(--guto-cyan)">
             {copy.speaking}
           </div>
         )}
+        </div>
       </div>
 
     </div>
