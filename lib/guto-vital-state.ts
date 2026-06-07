@@ -1,5 +1,7 @@
 import type { GutoMemory } from "@/lib/api/guto"
-import type { GutoAvatarEmotion } from "@/components/guto/guto-official-avatar"
+
+/** Estados visuais do avatar do GUTO (default/alerta/crítico/recompensa/super). */
+export type GutoAvatarEmotion = "default" | "alert" | "critical" | "reward" | "super"
 
 export type GutoVitalState =
   | "new"

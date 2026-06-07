@@ -4,15 +4,12 @@
  * GutoAvatarController — Avatar interativo com 3D spring tilt + toggle super
  *
  * ARQUITETURA:
- * - GutoOfficialAvatar sempre roda embaixo (qualidade 100% preservada: alpha channel, canvas matte, HEVC)
- * - Vídeo super em overlay com crossfade suave — toggle manual (tap entra, tap sai)
+ * - GutoVividAvatar (SVG vetorial) roda embaixo na emoção "default"
+ * - Camada "super" em overlay com crossfade suave — toggle manual (tap entra, tap sai)
  * - Framer Motion spring tilt no toque/drag e giroscópio no mobile
  * - Squish + glow azul + ripple em ambos os taps
  *
- * Three.js NÃO é usado aqui intencionalmente:
- * O avatar é um render 3D profissional. Qualquer recriação em WebGL seria um downgrade.
- * O efeito 3D vem de CSS perspective + spring physics — dá sensação de profundidade e massa
- * sem sacrificar nada da qualidade do render original.
+ * O efeito 3D vem de CSS perspective + spring physics — dá profundidade e massa ao avatar SVG.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
@@ -20,7 +17,7 @@ import { animate, motion, useMotionValue, useSpring } from "framer-motion"
 
 import { cn } from "@/lib/utils"
 import type { EvolutionStage } from "@/types/contract"
-import { GutoOfficialAvatar } from "./guto-official-avatar"
+import { GutoVividAvatar } from "./guto-vivid-avatar"
 
 interface GutoAvatarControllerProps {
   stage: EvolutionStage
@@ -278,7 +275,7 @@ export function GutoAvatarController({
               transition: `opacity ${FADE_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`,
             }}
           >
-            <GutoOfficialAvatar
+            <GutoVividAvatar
               size={size}
               evolution={stage}
               emotion="default"
@@ -301,7 +298,7 @@ export function GutoAvatarController({
                 transition: `opacity ${FADE_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`,
               }}
             >
-              <GutoOfficialAvatar
+              <GutoVividAvatar
                 size={size}
                 evolution={stage}
                 emotion="super"
