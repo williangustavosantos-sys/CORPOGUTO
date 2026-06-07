@@ -3,7 +3,7 @@ import '../styles/eliteHud.css';
 
 import { GutoAvatarController } from './guto/guto-avatar-controller';
 import type { EvolutionStage } from '@/types/contract';
-import type { GutoAvatarEmotion } from './guto/guto-official-avatar';
+import type { GutoAvatarEmotion } from '@/lib/guto-vital-state';
 
 const stages = [
   { id: 'baby', label: 'Baby', evolution: 'baby' },

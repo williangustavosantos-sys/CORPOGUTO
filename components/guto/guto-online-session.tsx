@@ -23,7 +23,7 @@ import { Clock, RotateCcw, Undo2, X } from "lucide-react"
 import type { GutoWorkoutPlan } from "@/lib/api/guto"
 import { clearActiveExercise, setActiveExercise } from "@/lib/api/guto"
 import type { EvolutionStage } from "@/types/contract"
-import { GutoOnlineLightAvatar } from "@/components/guto/guto-online-light-avatar"
+import { GutoVividAvatar } from "@/components/guto/guto-vivid-avatar"
 
 import { useGutoOnlineEngine } from "@/lib/guto-online/use-guto-online-engine"
 import { makeEventId, type GutoOnlineEvent } from "@/lib/guto-online/guto-online-events"
@@ -203,6 +203,7 @@ export function GutoOnlineSession({
   language,
   userName,
   onFinish,
+  evolution = "baby",
 }: GutoOnlineSessionProps) {
   // ─── Engine ──────────────────────────────────────────────────────────────
   // O plano traz aquecimento como exercício(s) com muscleGroup === "aquecimento".
@@ -743,7 +744,8 @@ export function GutoOnlineSession({
           {/* GUTO luz falante — transparente em Safari e Chrome */}
           <section className="flex w-full flex-col items-center">
             <div className="relative flex items-center justify-center">
-              <GutoOnlineLightAvatar
+              <GutoVividAvatar
+                evolution={evolution}
                 size="lg"
                 isActive={!showQuickTalk}
                 isSpeaking={

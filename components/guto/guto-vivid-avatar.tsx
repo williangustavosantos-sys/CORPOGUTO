@@ -1,23 +1,19 @@
 "use client"
 
 /**
- * GutoVividAvatar — AMOSTRA ISOLADA (não integrada na tela principal)
+ * GutoVividAvatar — avatar oficial do GUTO (100% SVG + Framer Motion).
  *
- * Novo avatar do GUTO desenhado 100% em SVG + Framer Motion, no estilo
- * "claro/branco-azul, heróico" enviado pelo usuário (baby bolinha → teen
- * moicano → adult bigode → elite super-herói).
+ * Estilo claro/branco-azul, fofo e carismático, com silhuetas distintas por
+ * fase (baby bolinha → teen com antena → adult roliço → elite herói com capa
+ * e coroa). Olhos e núcleo são esferas de vidro no ciano oficial (#52e7ff);
+ * os olhos azuis nunca mudam de cor (identidade GUTO).
  *
- * NÃO usa vídeo, NÃO usa GIF, NÃO carrega asset de /public.
- * NÃO substitui o avatar de produção (GutoOfficialAvatar / GutoAvatarController)
- * nem é usado por nenhum fluxo (chat/treino/dieta/XP). Existe só para a página
- * de amostra /dev/avatar-novo.
+ * Usado em produção via GutoAvatarController (Chat/Evoluir/Percurso) e no GUTO
+ * Online. Substituiu os antigos avatares em vídeo — sem vídeo/GIF, sem asset de
+ * /public: pesa KB e escala sem perder nitidez.
  *
- * Identidade GUTO preservada e alinhada ao app: olhos/núcleo no ciano oficial
- * (#52e7ff). As 4 fases mudam silhueta/acabamento; os olhos azuis nunca mudam
- * de cor.
- *
- * Determinístico de propósito: nenhuma animação usa Math.random/Date.now, então
- * o render é estável em SSR e não causa mismatch de hidratação no Next.
+ * Interação: ao tocar, reage (acena os braços, pulinho, olhos felizes, esfera
+ * brilha). Determinístico (sem Math.random/Date.now) → estável em SSR/hidratação.
  */
 
 import { useEffect, useRef, useState } from "react"
