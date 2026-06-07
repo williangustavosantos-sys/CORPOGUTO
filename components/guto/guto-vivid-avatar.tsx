@@ -20,6 +20,7 @@
  * o render é estável em SSR e não causa mismatch de hidratação no Next.
  */
 
+import { useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
 
 import { cn } from "@/lib/utils"
@@ -361,9 +362,48 @@ function Aura({
   )
 }
 
-// ── Arte por fase (silhueta recolorida + olhos/sobrancelha/núcleo animados) ──
+// Braço animável: acena (gira no ombro) quando `reacting`. dir -1 = esquerdo, +1 = direito.
+function Arm({
+  ox,
+  oy,
+  dir,
+  reacting,
+  children,
+}: {
+  ox: number
+  oy: number
+  dir: -1 | 1
+  reacting: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <motion.g
+      style={{ transformOrigin: `${ox}px ${oy}px`, transformBox: "view-box" }}
+      animate={reacting ? { rotate: [0, dir * 32, dir * 14, dir * 30, 0] } : { rotate: 0 }}
+      transition={
+        reacting
+          ? { duration: 0.85, ease: "easeInOut" }
+          : { type: "spring", stiffness: 200, damping: 16 }
+      }
+    >
+      {children}
+    </motion.g>
+  )
+}
 
-function BabyArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: boolean }) {
+// ── Arte por fase (silhuetas fofas + olhos/esfera animados; braços acenam) ──
+
+function BabyArt({
+  uid,
+  mood,
+  speaking,
+  reacting,
+}: {
+  uid: string
+  mood: Mood
+  speaking: boolean
+  reacting: boolean
+}) {
   const m = STAGE_META.baby
   return (
     <>
@@ -373,8 +413,12 @@ function BabyArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: b
       <circle cx={80} cy={78} r={68} fill={`url(#${uid}-body)`} />
       <circle cx={80} cy={78} r={68} fill="none" stroke="#bfe9fb" strokeWidth={1.5} opacity={0.6} />
       <ellipse cx={55} cy={50} rx={20} ry={13} fill="#ffffff" opacity={0.35} transform="rotate(-20 55 50)" />
-      <ellipse cx={15} cy={88} rx={12} ry={9} fill={`url(#${uid}-body)`} />
-      <ellipse cx={145} cy={88} rx={12} ry={9} fill={`url(#${uid}-body)`} />
+      <Arm ox={28} oy={86} dir={-1} reacting={reacting}>
+        <ellipse cx={15} cy={88} rx={12} ry={9} fill={`url(#${uid}-body)`} />
+      </Arm>
+      <Arm ox={132} oy={86} dir={1} reacting={reacting}>
+        <ellipse cx={145} cy={88} rx={12} ry={9} fill={`url(#${uid}-body)`} />
+      </Arm>
       <ellipse cx={38} cy={92} rx={10} ry={6} fill={BLUSH} opacity={0.32} />
       <ellipse cx={122} cy={92} rx={10} ry={6} fill={BLUSH} opacity={0.32} />
       <Eyes uid={uid} lx={m.eyes.lx} rx={m.eyes.rx} cy={m.eyes.cy} r={m.eyes.r} mood={mood} />
@@ -383,7 +427,17 @@ function BabyArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: b
   )
 }
 
-function TeenArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: boolean }) {
+function TeenArt({
+  uid,
+  mood,
+  speaking,
+  reacting,
+}: {
+  uid: string
+  mood: Mood
+  speaking: boolean
+  reacting: boolean
+}) {
   const m = STAGE_META.teen
   return (
     <>
@@ -400,11 +454,15 @@ function TeenArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: b
       <rect x={66} y={166} width={18} height={28} rx={9} fill="#d6f3ff" />
       <rect x={86} y={166} width={18} height={28} rx={9} fill="#d6f3ff" />
 
-      {/* bracinhos levantados (energético) */}
-      <ellipse cx={36} cy={112} rx={12} ry={22} fill={`url(#${uid}-body)`} transform="rotate(-22 36 112)" />
-      <ellipse cx={134} cy={112} rx={12} ry={22} fill={`url(#${uid}-body)`} transform="rotate(22 134 112)" />
-      <circle cx={29} cy={94} r={9} fill={`url(#${uid}-body)`} />
-      <circle cx={141} cy={94} r={9} fill={`url(#${uid}-body)`} />
+      {/* bracinhos relaxados (acenam ao toque) */}
+      <Arm ox={36} oy={108} dir={-1} reacting={reacting}>
+        <ellipse cx={30} cy={126} rx={12} ry={22} fill={`url(#${uid}-body)`} transform="rotate(10 30 126)" />
+        <circle cx={27} cy={147} r={9} fill={`url(#${uid}-body)`} />
+      </Arm>
+      <Arm ox={134} oy={108} dir={1} reacting={reacting}>
+        <ellipse cx={140} cy={126} rx={12} ry={22} fill={`url(#${uid}-body)`} transform="rotate(-10 140 126)" />
+        <circle cx={143} cy={147} r={9} fill={`url(#${uid}-body)`} />
+      </Arm>
 
       {/* corpo (ovo) */}
       <ellipse cx={85} cy={116} rx={50} ry={56} fill={`url(#${uid}-body)`} />
@@ -421,7 +479,17 @@ function TeenArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: b
   )
 }
 
-function AdultArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: boolean }) {
+function AdultArt({
+  uid,
+  mood,
+  speaking,
+  reacting,
+}: {
+  uid: string
+  mood: Mood
+  speaking: boolean
+  reacting: boolean
+}) {
   const m = STAGE_META.adult
   return (
     <>
@@ -433,13 +501,17 @@ function AdultArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: 
       <rect x={80} y={176} width={24} height={28} rx={11} fill="#cfeefb" />
       <rect x={116} y={176} width={24} height={28} rx={11} fill="#cfeefb" />
 
-      {/* braços + mãos-luva grandes (forte, mas fofo) */}
-      <ellipse cx={44} cy={138} rx={14} ry={20} fill={`url(#${uid}-body)`} transform="rotate(8 44 138)" />
-      <ellipse cx={176} cy={138} rx={14} ry={20} fill={`url(#${uid}-body)`} transform="rotate(-8 176 138)" />
-      <circle cx={30} cy={154} r={18} fill={`url(#${uid}-body)`} />
-      <circle cx={190} cy={154} r={18} fill={`url(#${uid}-body)`} />
-      <circle cx={30} cy={154} r={18} fill="none" stroke="#bfe9fb" strokeWidth={1.3} opacity={0.6} />
-      <circle cx={190} cy={154} r={18} fill="none" stroke="#bfe9fb" strokeWidth={1.3} opacity={0.6} />
+      {/* braços + mãos-luva grandes (acenam ao toque) */}
+      <Arm ox={50} oy={124} dir={-1} reacting={reacting}>
+        <ellipse cx={44} cy={138} rx={14} ry={20} fill={`url(#${uid}-body)`} transform="rotate(8 44 138)" />
+        <circle cx={30} cy={154} r={18} fill={`url(#${uid}-body)`} />
+        <circle cx={30} cy={154} r={18} fill="none" stroke="#bfe9fb" strokeWidth={1.3} opacity={0.6} />
+      </Arm>
+      <Arm ox={170} oy={124} dir={1} reacting={reacting}>
+        <ellipse cx={176} cy={138} rx={14} ry={20} fill={`url(#${uid}-body)`} transform="rotate(-8 176 138)" />
+        <circle cx={190} cy={154} r={18} fill={`url(#${uid}-body)`} />
+        <circle cx={190} cy={154} r={18} fill="none" stroke="#bfe9fb" strokeWidth={1.3} opacity={0.6} />
+      </Arm>
 
       {/* corpo largo e fofo */}
       <ellipse cx={110} cy={124} rx={74} ry={60} fill={`url(#${uid}-body)`} />
@@ -456,7 +528,17 @@ function AdultArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: 
   )
 }
 
-function EliteArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: boolean }) {
+function EliteArt({
+  uid,
+  mood,
+  speaking,
+  reacting,
+}: {
+  uid: string
+  mood: Mood
+  speaking: boolean
+  reacting: boolean
+}) {
   const m = STAGE_META.elite
   return (
     <>
@@ -472,11 +554,15 @@ function EliteArt({ uid, mood, speaking }: { uid: string; mood: Mood; speaking: 
       <rect x={86} y={190} width={22} height={28} rx={10} fill={`url(#${uid}-body)`} />
       <rect x={112} y={190} width={22} height={28} rx={10} fill={`url(#${uid}-body)`} />
 
-      {/* bracinhos */}
-      <ellipse cx={50} cy={150} rx={13} ry={24} fill={`url(#${uid}-body)`} transform="rotate(8 50 150)" />
-      <ellipse cx={170} cy={150} rx={13} ry={24} fill={`url(#${uid}-body)`} transform="rotate(-8 170 150)" />
-      <circle cx={45} cy={174} r={11} fill={`url(#${uid}-body)`} />
-      <circle cx={175} cy={174} r={11} fill={`url(#${uid}-body)`} />
+      {/* bracinhos (acenam ao toque) */}
+      <Arm ox={54} oy={132} dir={-1} reacting={reacting}>
+        <ellipse cx={50} cy={150} rx={13} ry={24} fill={`url(#${uid}-body)`} transform="rotate(8 50 150)" />
+        <circle cx={45} cy={174} r={11} fill={`url(#${uid}-body)`} />
+      </Arm>
+      <Arm ox={166} oy={132} dir={1} reacting={reacting}>
+        <ellipse cx={170} cy={150} rx={13} ry={24} fill={`url(#${uid}-body)`} transform="rotate(-8 170 150)" />
+        <circle cx={175} cy={174} r={11} fill={`url(#${uid}-body)`} />
+      </Arm>
 
       {/* corpo */}
       <ellipse cx={110} cy={140} rx={56} ry={58} fill={`url(#${uid}-body)`} />
@@ -522,28 +608,42 @@ export function GutoVividAvatar({
   onTap,
 }: GutoVividAvatarProps) {
   const meta = STAGE_META[evolution]
-  const mood = MOODS[emotion]
   const [vw, vh] = meta.view
-  // ID único por instância+fase+emoção — evita colisão de <defs> na mesma página.
+
+  // Reação ao toque: pulinho + braços acenam + olhos felizes + esfera brilha.
+  const [reacting, setReacting] = useState(false)
+  const reactTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (reactTimer.current) clearTimeout(reactTimer.current) }, [])
+
+  const handleClick = () => {
+    onTap?.()
+    setReacting(true)
+    if (reactTimer.current) clearTimeout(reactTimer.current)
+    reactTimer.current = setTimeout(() => setReacting(false), 950)
+  }
+
+  // Durante a reação, usa o humor "reward" (olhos felizes + esfera forte).
+  const mood = reacting ? MOODS.reward : MOODS[emotion]
+  // ID único por instância — evita colisão de <defs> na mesma página.
   const uid = `gv-${evolution}-${emotion}-${size}`
 
   const art = (() => {
     switch (evolution) {
       case "baby":
-        return <BabyArt uid={uid} mood={mood} speaking={isSpeaking} />
+        return <BabyArt uid={uid} mood={mood} speaking={isSpeaking} reacting={reacting} />
       case "teen":
-        return <TeenArt uid={uid} mood={mood} speaking={isSpeaking} />
+        return <TeenArt uid={uid} mood={mood} speaking={isSpeaking} reacting={reacting} />
       case "adult":
-        return <AdultArt uid={uid} mood={mood} speaking={isSpeaking} />
+        return <AdultArt uid={uid} mood={mood} speaking={isSpeaking} reacting={reacting} />
       case "elite":
-        return <EliteArt uid={uid} mood={mood} speaking={isSpeaking} />
+        return <EliteArt uid={uid} mood={mood} speaking={isSpeaking} reacting={reacting} />
     }
   })()
 
   return (
     <div
       className={cn("relative flex select-none flex-col items-center justify-center", className)}
-      onClick={onTap}
+      onClick={handleClick}
       role="img"
       aria-label={`GUTO ${evolution} — ${emotion}`}
       data-guto-vivid-avatar
@@ -556,7 +656,7 @@ export function GutoVividAvatar({
           ...(px ? { width: px, height: px } : null),
           opacity: isActive ? 1 : 0.5,
           transition: "opacity 0.4s ease",
-          cursor: onTap ? "pointer" : "default",
+          cursor: "pointer",
         }}
       >
         <svg
@@ -571,7 +671,30 @@ export function GutoVividAvatar({
             animate={{ scale: [1, 1 + mood.breathAmp, 1], y: [0, -3, 0] }}
             transition={{ duration: mood.breathDur, repeat: Infinity, ease: "easeInOut" }}
           >
-            {art}
+            {/* pulinho de comemoração ao toque */}
+            <motion.g
+              style={{ transformOrigin: `${vw / 2}px ${meta.ground}px`, transformBox: "view-box" }}
+              animate={
+                reacting
+                  ? { y: [0, -16, 0, -7, 0], scaleX: [1, 1.06, 0.96, 1.02, 1], scaleY: [1, 0.94, 1.05, 0.98, 1] }
+                  : { y: 0, scaleX: 1, scaleY: 1 }
+              }
+              transition={reacting ? { duration: 0.9, ease: "easeOut" } : { duration: 0.3 }}
+            >
+              {art}
+            </motion.g>
+            {reacting && (
+              <Sparkles
+                pts={[
+                  [vw * 0.18, vh * 0.34, 6],
+                  [vw * 0.82, vh * 0.34, 6],
+                  [vw * 0.5, vh * 0.12, 6],
+                  [vw * 0.26, vh * 0.6, 5],
+                  [vw * 0.74, vh * 0.6, 5],
+                ]}
+                color={EYE_GLOW}
+              />
+            )}
           </motion.g>
         </svg>
       </div>

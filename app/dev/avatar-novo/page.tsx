@@ -118,6 +118,9 @@ export default function AvatarNovoDevPage() {
           Fases — emoção: <span style={{ color: CYAN_DEEP }}>{emotion}</span>
           {speaking ? <span style={{ color: CYAN_DEEP }}> · falando</span> : null}
         </SectionTitle>
+        <p style={{ fontSize: 12, color: "#7799bb", margin: "-8px 0 14px" }}>
+          Toque em qualquer GUTO — ele acena os braços, dá um pulinho e fica feliz.
+        </p>
         <div
           style={{
             display: "grid",
@@ -188,7 +191,7 @@ export default function AvatarNovoDevPage() {
                 onTap={() => setChatSuper((v) => !v)}
               />
               <div style={{ fontSize: 10, color: "#9ab6cc", marginTop: 4 }}>
-                toque no GUTO para ver o modo {chatSuper ? "normal" : "super"}
+                toque no GUTO — ele reage e troca para o modo {chatSuper ? "normal" : "super"}
               </div>
             </div>
             <div style={inputBar}>
