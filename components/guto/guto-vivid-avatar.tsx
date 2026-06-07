@@ -605,6 +605,11 @@ export function GutoVividAvatar({
 }: GutoVividAvatarProps) {
   const meta = STAGE_META[evolution]
   const [vw, vh] = meta.view
+  // Respiro ao redor da figura: sem isso o avatar preenche a caixa inteira e
+  // fica gigante em tamanhos grandes (ex.: "xl" no chat). ~20% de margem/lado.
+  const PAD = 0.2
+  const padX = vw * PAD
+  const padY = vh * PAD
 
   // Reação ao toque: pulinho + braços acenam + olhos felizes + esfera brilha.
   const [reacting, setReacting] = useState(false)
@@ -656,7 +661,7 @@ export function GutoVividAvatar({
         }}
       >
         <svg
-          viewBox={`0 0 ${vw} ${vh}`}
+          viewBox={`${-padX} ${-padY} ${vw + padX * 2} ${vh + padY * 2}`}
           width="100%"
           height="100%"
           xmlns="http://www.w3.org/2000/svg"

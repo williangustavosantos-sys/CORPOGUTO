@@ -71,10 +71,25 @@ export function EvolutionsTab({ language, currentEvolution, memory }: Evolutions
                       interactive={false}
                     />
                   ) : (
-                    <div className="relative flex h-20 w-20 items-center justify-center rounded-[1.4rem] bg-[rgba(191,199,208,0.24)] shadow-[inset_3px_3px_10px_rgba(124,136,152,0.18),inset_-4px_-4px_12px_rgba(255,255,255,0.72)]">
-                      <div className="absolute inset-4 rounded-full bg-[rgba(255,255,255,0.78)] opacity-70" />
-                      <div className="absolute inset-0 rounded-[1.4rem] bg-[radial-gradient(circle_at_center,rgba(82,231,255,0.18)_0%,transparent_72%)]" />
-                    </div>
+                    <>
+                      {/* avatar da fase, porém apagado (preview do que vem) */}
+                      <div className="h-full w-full opacity-45 grayscale">
+                        <GutoAvatarController
+                          stage={card.stage}
+                          size="md"
+                          showPlatform={false}
+                          className="w-full"
+                          interactive={false}
+                          isActive={false}
+                        />
+                      </div>
+                      {/* cadeado na frente */}
+                      <div className="absolute inset-0 flex items-center justify-center bg-[rgba(244,249,253,0.35)]">
+                        <div className="guto-deboss flex h-9 w-9 items-center justify-center rounded-full">
+                          <Lock className="h-4 w-4 text-[rgba(13,35,65,0.5)]" />
+                        </div>
+                      </div>
+                    </>
                   )}
                 </div>
 
@@ -93,11 +108,7 @@ export function EvolutionsTab({ language, currentEvolution, memory }: Evolutions
                       <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-(--guto-cyan)">
                         {copy.active}
                       </span>
-                    ) : (
-                      <div className="guto-deboss flex h-10 w-10 items-center justify-center rounded-full">
-                        <Lock className="h-4 w-4 text-[rgba(13,35,65,0.34)]" />
-                      </div>
-                    )}
+                    ) : null}
                   </div>
 
                   <p className="mt-2 text-sm text-[rgba(13,35,65,0.64)]">
