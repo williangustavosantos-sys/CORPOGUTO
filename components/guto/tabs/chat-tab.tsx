@@ -1195,6 +1195,11 @@ export function ChatTab({
     if (sendInFlightRef.current) return
     sendInFlightRef.current = true
 
+    // Enviar uma nova mensagem INTERROMPE a fala atual do GUTO (não espera o TTS
+    // terminar) — o usuário pode falar a qualquer momento.
+    gutoVoice.stop()
+    setIsSpeaking(false)
+
     const safeLanguage = getLanguage(language) as SupportedLanguage
 
     const userMessage: Message = {
@@ -1292,8 +1297,12 @@ export function ChatTab({
 
       triggerProactivityExtraction(safeLanguage)
 
+      // Fala em paralelo (fire-and-forget): NÃO travar o input enquanto o GUTO
+      // fala. Antes o `await` mantinha isSending=true durante toda a fala, então
+      // o usuário só conseguia enviar depois que ele parava. Agora libera assim
+      // que a resposta chega (o finally roda em seguida).
       if (!isMuted) {
-        await synthesizeAndPlay(fala, safeLanguage)
+        void synthesizeAndPlay(fala, safeLanguage)
       }
     } catch {
       pendingExpectedResponseRef.current = null
