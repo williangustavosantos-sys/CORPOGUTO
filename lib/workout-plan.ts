@@ -207,9 +207,31 @@ function normalizeTitle(value?: string) {
     .toLocaleLowerCase("pt-BR")
 }
 
-export function getLocalizedWorkoutTitle(focusKey: WorkoutFocus | undefined, language: string) {
+// Espelha o backend (server.ts resolveFullBodyTitle): corpo inteiro só é
+// "Força total" para objetivo de força (muscle_gain/hypertrophy). Os demais
+// objetivos recebem rótulo neutro — a calibragem manda que o objetivo molde a
+// missão, então o título não pode afirmar "força" para fat_loss/condicionamento.
+const FULL_BODY_TITLE_BY_GOAL: Record<"strength" | "neutral", Record<GutoLanguage, string>> = {
+  strength: { "pt-BR": "Força total", "it-IT": "Forza totale", "en-US": "Full-body strength" },
+  neutral: { "pt-BR": "Corpo inteiro", "it-IT": "Corpo intero", "en-US": "Full body" },
+}
+
+// Sem focusKey o frontend NÃO inventa "corpo inteiro/força": usa título neutro do
+// dia (Regra: frontend não inventa treino — GUTO_CHAT_E_CEREBRO §9).
+const GENERIC_DAY_TITLE: Record<GutoLanguage, string> = {
+  "pt-BR": "Treino do dia",
+  "it-IT": "Allenamento del giorno",
+  "en-US": "Today's workout",
+}
+
+export function getLocalizedWorkoutTitle(focusKey: WorkoutFocus | undefined, language: string, goal?: string) {
   const validLang = normalizeLanguage(language)
-  return WORKOUT_FOCUS_TITLES[focusKey || "full_body"][validLang]
+  if (!focusKey) return GENERIC_DAY_TITLE[validLang]
+  if (focusKey === "full_body") {
+    const isStrengthGoal = goal === "muscle_gain" || goal === "hypertrophy"
+    return FULL_BODY_TITLE_BY_GOAL[isStrengthGoal ? "strength" : "neutral"][validLang]
+  }
+  return WORKOUT_FOCUS_TITLES[focusKey][validLang]
 }
 
 export function localizeGutoWorkoutPlan(plan: GutoWorkoutPlan | null | undefined, language: string): GutoWorkoutPlan | null {
@@ -217,7 +239,7 @@ export function localizeGutoWorkoutPlan(plan: GutoWorkoutPlan | null | undefined
   const validLang = normalizeLanguage(language)
   const normalizedFocus = normalizeTitle(plan.focus)
   const shouldReplaceFocus = Boolean(plan.focusKey) || GENERIC_WORKOUT_TITLES.has(normalizedFocus)
-  const localizedFocus = shouldReplaceFocus ? getLocalizedWorkoutTitle(plan.focusKey, validLang) : plan.focus
+  const localizedFocus = shouldReplaceFocus ? getLocalizedWorkoutTitle(plan.focusKey, validLang, plan.goal) : plan.focus
   const localizedExercises = plan.exercises.map((exercise) => {
     const copyKey = EXERCISE_COPY_BY_ID[exercise.id] ? exercise.id : EXERCISE_COPY_ALIASES[exercise.id]
     const copy = copyKey ? EXERCISE_COPY_BY_ID[copyKey]?.[validLang] : undefined
