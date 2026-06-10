@@ -382,6 +382,33 @@ test.describe('GUTO – Fluxos críticos', () => {
     await snap(page, '10-chat-input')
   })
 
+  test('10b — abertura do app injeta mensagem proativa contextual no chat', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    let forceArrivalCalled = false
+    await page.route((url) => isApiCall(url) && url.pathname.includes('/guto/proactive'), (route) => {
+      const url = new URL(route.request().url())
+      if (url.searchParams.get('force') === '1') forceArrivalCalled = true
+      return route.fulfill(jsonBody({
+        due: true,
+        slot: 'arrival',
+        fala: 'QA, tua missão de hoje já está pronta: Peito e Tríceps. Se você tiver 25 minutos, eu te puxo agora.',
+        acao: 'none',
+        expectedResponse: null,
+        avatarEmotion: 'reward',
+      }))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(/tua missão de hoje já está pronta/i)).toBeVisible({ timeout: 10000 })
+    expect(forceArrivalCalled).toBe(true)
+
+    const bodyText = await page.locator('body').innerText()
+    expect(bodyText).not.toMatch(/Como posso te ajudar hoje/i)
+  })
+
   // ── 11. Enviar mensagem no chat ────────────────────────────────────────────
   test('11 — envia mensagem no chat e recebe resposta (mocked)', async ({ page }) => {
     await injectAuthStorage(page)
