@@ -12,6 +12,7 @@ import { getLanguage, translations } from "../translations"
 import type { EvolutionStage } from "@/types/contract"
 import type { PathDay, PathDayStatus } from "../view-models"
 import { getGutoVitalState } from "@/lib/guto-vital-state"
+import { sumXpForDay } from "@/lib/xp-events"
 import { gutoAudio } from "@/lib/audio-haptics"
 
 interface PathTabProps {
@@ -33,8 +34,7 @@ const pathCopy = {
     noXp: "0 XP hoje",
     noStreak: "Sequência ainda zerada",
     close: "FECHAR",
-    xpFull: "+100 XP hoje",
-    xpAdapted: "+50 XP hoje",
+    xpToday: (xp: number) => `+${xp} XP hoje`,
     streakDays: "dias na sequência",
   },
   "en-US": {
@@ -46,8 +46,7 @@ const pathCopy = {
     noXp: "0 XP today",
     noStreak: "Streak still at zero",
     close: "CLOSE",
-    xpFull: "+100 XP today",
-    xpAdapted: "+50 XP today",
+    xpToday: (xp: number) => `+${xp} XP today`,
     streakDays: "day streak",
   },
   "it-IT": {
@@ -59,8 +58,7 @@ const pathCopy = {
     noXp: "0 XP oggi",
     noStreak: "Sequenza ancora a zero",
     close: "CHIUDI",
-    xpFull: "+100 XP oggi",
-    xpAdapted: "+50 XP oggi",
+    xpToday: (xp: number) => `+${xp} XP oggi`,
     streakDays: "giorni di fila",
   },
 } as const
@@ -143,7 +141,11 @@ export function PathTab({ language, memory, workoutPlan, currentEvolution, valid
       return !Number.isNaN(createdAt.getTime()) && toDateKey(createdAt) === todayKey
     })
   )
-  const xpReward = hasValidatedToday ? "+100 XP" : isAdaptedToday ? "+50 XP" : "0 XP"
+  // XP do dia vem do ledger (xpEvents); flags de validação ficam como piso para
+  // memórias antigas sem evento datado — nunca regride o que já era exibido.
+  const flagFallbackXp = hasValidatedToday ? 100 : isAdaptedToday ? 50 : 0
+  const todayXp = Math.max(sumXpForDay(memory, todayKey), flagFallbackXp)
+  const xpReward = todayXp > 0 ? `+${todayXp} XP` : "0 XP"
   const vitalState = useMemo(() => getGutoVitalState(memory), [memory])
   const [selectedPoster, setSelectedPoster] = useState<string | null>(null)
 
@@ -270,7 +272,7 @@ export function PathTab({ language, memory, workoutPlan, currentEvolution, valid
                 </p>
                 <p className="flex items-center gap-2">
                   <Zap className="h-4 w-4 text-[rgba(117,165,211,0.95)]" />
-                  {hasValidatedToday ? copy.xpFull : isAdaptedToday ? copy.xpAdapted : copy.noXp}
+                  {todayXp > 0 ? copy.xpToday(todayXp) : copy.noXp}
                 </p>
                 <p className="flex items-center gap-2">
                   <Flame className="h-4 w-4 text-[rgba(117,165,211,0.95)]" />
