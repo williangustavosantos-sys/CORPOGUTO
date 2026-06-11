@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { motion } from "framer-motion"
-import { CheckCircle2, RotateCcw, Play, Radio } from "lucide-react"
+import { CheckCircle2, ChevronDown, RotateCcw, Play, Radio } from "lucide-react"
 
 import type { GutoMemory, GutoWorkoutPlan } from "@/lib/api/guto"
 import type { EvolutionStage } from "@/types/contract"
+import { buildCompactRows, type CompactExerciseRow } from "@/lib/mission-view"
 import { getLanguage, translations } from "../translations"
 import type { MissionExercise } from "../view-models"
 import { GutoOnlineSession } from "../guto-online-session"
@@ -49,6 +50,7 @@ const missionCopy = {
     reps: "Reps",
     rest: "Descanso",
     observation: "Obs",
+    technique: "Técnica",
     exercise: "Exercício",
     start: "Iniciar missão",
     complete: "Missão executada",
@@ -82,6 +84,7 @@ const missionCopy = {
     reps: "Reps",
     rest: "Rest",
     observation: "Note",
+    technique: "Technique",
     exercise: "Exercise",
     start: "Start mission",
     complete: "Mission executed",
@@ -115,6 +118,7 @@ const missionCopy = {
     reps: "Ripetizioni",
     rest: "Recupero",
     observation: "Nota",
+    technique: "Tecnica",
     exercise: "Esercizio",
     start: "Avvia missione",
     complete: "Missione eseguita",
@@ -171,6 +175,7 @@ export function MissionTab({
   const [started, setStarted] = useState(false)
   const [onlineOpen, setOnlineOpen] = useState(false)
   const [completedExerciseIds, setCompletedExerciseIds] = useState<string[]>([])
+  const [expandedExerciseId, setExpandedExerciseId] = useState<string | null>(null)
   const exercises = useMemo(() => workoutPlan?.exercises || [], [workoutPlan])
   const missionKey = workoutPlan?.scheduledFor || workoutPlan?.focus || "empty"
   const completedCount = completedExerciseIds.length
@@ -186,18 +191,21 @@ export function MissionTab({
           ? copy.gutoPlan
           : null
 
-  const warmupExercises = useMemo(
-    () => exercises.filter((e) => e.muscleGroup === "aquecimento"),
-    [exercises]
+  // Lista compacta: visão geral do treino inteiro numa tela; o detalhe
+  // (vídeo, observação, técnica, dúvida) abre ao tocar no exercício.
+  const compactSections = useMemo(
+    () => buildCompactRows(exercises, completedExerciseIds, trainedToday),
+    [completedExerciseIds, exercises, trainedToday]
   )
-  const mainExercises = useMemo(
-    () => exercises.filter((e) => e.muscleGroup !== "aquecimento"),
+  const exercisesById = useMemo(
+    () => new Map(exercises.map((exercise) => [exercise.id, exercise])),
     [exercises]
   )
 
   useEffect(() => {
     setStarted(Boolean(trainedToday || adaptedMissionToday))
     setCompletedExerciseIds(trainedToday ? exercises.map((exercise) => exercise.id) : [])
+    setExpandedExerciseId(null)
   }, [adaptedMissionToday, exercises, missionKey, trainedToday])
 
   const toggleExercise = (exerciseId: string) => {
@@ -239,100 +247,110 @@ export function MissionTab({
     </div>
   )
 
-  const renderExerciseCard = (exercise: MissionExercise, index: number) => {
-    const exerciseIndex = exercises.findIndex((item) => item.id === exercise.id)
-    const isDone = trainedToday || completedExerciseIds.includes(exercise.id)
-    const categoryLabel = MUSCLE_GROUP_LABEL[validLang]?.[exercise.muscleGroup] || exercise.muscleGroup
+  // Detalhe expandido: vídeo, observação completa, técnica e botão de dúvida.
+  // O vídeo só monta quando aberto (antes eram N <video autoplay> simultâneos).
+  const renderExerciseDetail = (exercise: MissionExercise) => (
+    <div className="space-y-2 pb-3 pl-1 pr-1 pt-1">
+      <div className="h-40 overflow-hidden rounded-[1rem] border border-[rgba(82,231,255,0.45)] bg-white/65 shadow-[inset_0_1px_0_rgba(255,255,255,0.86)]">
+        {exercise.videoUrl ? (
+          <video
+            src={exercise.videoUrl}
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="metadata"
+            controls={false}
+            className="h-full w-full object-contain"
+          />
+        ) : (
+          <div className="grid h-full w-full place-items-center px-2 text-center font-mono text-[8px] font-black uppercase tracking-widest text-[rgba(13,35,65,0.38)]">
+            {copy.previewUnavailable}
+          </div>
+        )}
+      </div>
+
+      {exercise.note && (
+        <p className="guto-readable-body text-[12px]">
+          <span className="guto-readable-label text-[8px]">{copy.observation}: </span>
+          {exercise.note}
+        </p>
+      )}
+      {exercise.cue && (
+        <p className="guto-readable-body text-[12px]">
+          <span className="guto-readable-label text-[8px]">{copy.technique}: </span>
+          {exercise.cue}
+        </p>
+      )}
+
+      <button
+        type="button"
+        onClick={() => { gutoAudio.playGutoFeedback('tap'); onAskExercise(exercise) }}
+        className="guto-cta-ghost w-full"
+        aria-label={`${copy.doubt}: ${exercise.name}`}
+      >
+        <span className="font-mono text-[13px] font-black text-(--guto-cyan)">?</span>
+        {copy.askGuto}
+      </button>
+    </div>
+  )
+
+  const renderExerciseRow = (row: CompactExerciseRow) => {
+    const exercise = exercisesById.get(row.id)
+    if (!exercise) return null
+    const isExpanded = expandedExerciseId === row.id
+    const categoryLabel = MUSCLE_GROUP_LABEL[validLang]?.[row.muscleGroup] || row.muscleGroup
 
     return (
-      <motion.div
-        key={`${exercise.id}-${index}`}
-        className="guto-premium-card overflow-hidden p-3"
-        initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: exerciseIndex * 0.025 }}
-      >
-        {/* Card header: checkbox + name + ? */}
-        <div className="mb-2.5 flex items-center gap-3">
+      <div key={row.id} className="border-b border-[rgba(13,35,65,0.07)] last:border-b-0">
+        <div className="flex min-h-11 items-center gap-2 py-1">
           <button
             type="button"
-            onClick={() => { gutoAudio.playGutoFeedback('select'); toggleExercise(exercise.id) }}
+            onClick={() => { gutoAudio.playGutoFeedback('select'); toggleExercise(row.id) }}
             className="guto-slot guto-big-touch grid shrink-0 place-items-center rounded-full"
-            aria-label={`${copy.completed}: ${exercise.name}`}
-            aria-pressed={isDone}
+            aria-label={`${copy.completed}: ${row.name}`}
+            aria-pressed={row.done}
           >
             <CheckCircle2
-              className={isDone ? "h-6 w-6 text-(--guto-cyan)" : "h-6 w-6 text-[rgba(13,35,65,0.22)]"}
+              className={row.done ? "h-5 w-5 text-(--guto-cyan)" : "h-5 w-5 text-[rgba(13,35,65,0.22)]"}
             />
           </button>
 
-          <div className="flex min-w-0 flex-1 flex-col">
-            <h2 className="text-[15px] font-black uppercase leading-tight tracking-[0.02em] text-(--guto-navy)">
-              {exercise.name}
-            </h2>
-            <span className="guto-status-pill mt-1 w-fit">
-              {categoryLabel}
-            </span>
-          </div>
-
           <button
             type="button"
-            onClick={() => { gutoAudio.playGutoFeedback('tap'); onAskExercise(exercise) }}
-            className="guto-slot guto-big-touch grid shrink-0 place-items-center rounded-full border border-[rgba(82,231,255,0.45)] bg-[rgba(82,231,255,0.10)]"
-            aria-label={`${copy.doubt}: ${exercise.name}`}
+            onClick={() => {
+              gutoAudio.playGutoFeedback('tap')
+              setExpandedExerciseId(isExpanded ? null : row.id)
+            }}
+            className="flex min-h-11 min-w-0 flex-1 items-center gap-2 text-left"
+            aria-expanded={isExpanded}
+            aria-label={`${copy.exercise}: ${row.name}`}
           >
-            <span className="font-mono text-[15px] font-black text-(--guto-cyan)">?</span>
+            <span className="w-5 shrink-0 text-center font-mono text-[10px] font-black text-[rgba(13,35,65,0.38)]">
+              {row.order}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span
+                className={`block truncate text-[13px] font-black uppercase leading-tight tracking-[0.02em] ${row.done ? "text-[rgba(13,35,65,0.42)] line-through" : "text-(--guto-navy)"}`}
+              >
+                {row.name}
+              </span>
+              <span className="mt-0.5 block truncate font-mono text-[10px] font-bold text-[rgba(13,35,65,0.52)]">
+                {categoryLabel}
+                {" · "}
+                <span className="whitespace-nowrap">{row.sets}×{row.repsLabel}</span>
+                {" · "}
+                <span className="whitespace-nowrap">{row.rest}</span>
+              </span>
+            </span>
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-[rgba(13,35,65,0.34)] transition-transform ${isExpanded ? "rotate-180" : ""}`}
+            />
           </button>
         </div>
 
-        {/* Card body: metrics (left) + video (right) */}
-        <div className="flex items-start gap-3">
-          {/* Metrics + obs */}
-          <div className="min-w-0 flex-1">
-            <div className="mb-2 grid grid-cols-3 gap-1.5">
-              <div className="rounded-[14px] bg-white/55 px-2 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
-                <div className="text-[20px] font-black leading-none text-(--guto-navy)">{exercise.sets}</div>
-                <div className="guto-readable-label mt-1 text-[8px]">{copy.series}</div>
-              </div>
-              <div className="rounded-[14px] bg-white/55 px-2 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
-                <div className="text-[20px] font-black leading-none text-(--guto-navy)">{exercise.reps}</div>
-                <div className="guto-readable-label mt-1 text-[8px]">{copy.reps}</div>
-              </div>
-              <div className="rounded-[14px] bg-white/55 px-2 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.85)]">
-                <div className="text-[15px] font-black leading-none text-(--guto-navy)">{exercise.rest}</div>
-                <div className="guto-readable-label mt-1 text-[8px]">{copy.rest}</div>
-              </div>
-            </div>
-
-            {exercise.note && (
-              <p className="guto-readable-body line-clamp-2 text-[12px]">
-                <span className="guto-readable-label text-[8px]">{copy.observation}: </span>
-                {exercise.note}
-              </p>
-            )}
-          </div>
-
-          {/* Video thumbnail */}
-          <div className="h-[80px] w-[80px] shrink-0 overflow-hidden rounded-[1rem] border border-[rgba(82,231,255,0.45)] bg-white/65 shadow-[inset_0_1px_0_rgba(255,255,255,0.86)]">
-            {exercise.videoUrl ? (
-              <video
-                src={exercise.videoUrl}
-                autoPlay
-                muted
-                loop
-                playsInline
-                preload="metadata"
-                controls={false}
-                className="h-full w-full object-contain"
-              />
-            ) : (
-              <div className="grid h-full w-full place-items-center px-2 text-center font-mono text-[8px] font-black uppercase tracking-widest text-[rgba(13,35,65,0.38)]">
-                {copy.previewUnavailable}
-              </div>
-            )}
-          </div>
-        </div>
-      </motion.div>
+        {isExpanded && renderExerciseDetail(exercise)}
+      </div>
     )
   }
 
@@ -413,20 +431,34 @@ export function MissionTab({
         </div>
       </div>
 
-      {/* Exercise sections */}
+      {/* Lista compacta do treino inteiro — pb-6 garante respiro acima do
+          botão Validar; o botão fica FORA do scroll e nunca cobre exercício. */}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="guto-tab-scroll space-y-2 pb-3 pt-0.5">
-          {warmupExercises.length > 0 && (
-            <section className="space-y-2">
+        <div className="guto-tab-scroll space-y-2 pb-6 pt-0.5">
+          {compactSections.warmup.length > 0 && (
+            <section>
               {renderSectionHeader(copy.warmup)}
-              {warmupExercises.map(renderExerciseCard)}
+              <motion.div
+                className="guto-premium-card px-3 py-1"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                {compactSections.warmup.map(renderExerciseRow)}
+              </motion.div>
             </section>
           )}
 
-          {mainExercises.length > 0 && (
-            <section className="space-y-2">
+          {compactSections.main.length > 0 && (
+            <section>
               {renderSectionHeader(copy.mainSection)}
-              {mainExercises.map(renderExerciseCard)}
+              <motion.div
+                className="guto-premium-card px-3 py-1"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.05 }}
+              >
+                {compactSections.main.map(renderExerciseRow)}
+              </motion.div>
             </section>
           )}
         </div>
