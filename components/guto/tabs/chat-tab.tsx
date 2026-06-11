@@ -52,7 +52,8 @@ import { getLanguage, translations } from "../translations"
 import type { MissionExercise } from "../view-models"
 import { gutoAudio } from "@/lib/audio-haptics"
 import { firstRealGutoName, hasCompleteGutoCalibration } from "@/lib/guto-profile"
-import { gutoVoice } from "@/lib/guto-voice/guto-voice-service"
+import { GutoVoiceQueue } from "@/lib/guto-online/guto-voice-queue"
+import { createChatVoiceItem } from "@/lib/guto-chat-voice"
 
 interface PendingExerciseQuestion {
   id: string
@@ -155,8 +156,6 @@ const chatCopy: Record<
     xpCardDismiss: string
     exerciseContextHint: (name: string) => string
     mealContextHint: (name: string) => string
-    exerciseDoubtTrigger: (name: string) => string
-    mealDoubtTrigger: (name: string) => string
     exerciseInputPlaceholder: string
     mealInputPlaceholder: string
     contextClear: string
@@ -183,8 +182,6 @@ const chatCopy: Record<
       `Manda tua dúvida sobre ${name} — eu já sei qual exercício é.`,
     mealContextHint: (name) =>
       `Manda o que precisa sobre ${name} — eu já tenho o contexto da refeição.`,
-    exerciseDoubtTrigger: (name) => `Tenho uma dúvida sobre ${name}.`,
-    mealDoubtTrigger: (name) => `Tenho uma dúvida sobre ${name} na refeição.`,
     exerciseInputPlaceholder: "Ex.: equipamento ocupado, como executar, trocar exercício…",
     mealInputPlaceholder: "Ex.: não tenho isso, quanto de substituto, trocar alimento…",
     contextClear: "Sair do contexto",
@@ -210,8 +207,6 @@ const chatCopy: Record<
       `Send your question about ${name} — I already know which exercise this is.`,
     mealContextHint: (name) =>
       `Tell me what you need about ${name} — I already have this meal's context.`,
-    exerciseDoubtTrigger: (name) => `I have a question about ${name}.`,
-    mealDoubtTrigger: (name) => `I have a question about ${name} in this meal.`,
     exerciseInputPlaceholder: "E.g. equipment busy, how to perform, swap exercise…",
     mealInputPlaceholder: "E.g. don't have this, how much substitute, swap food…",
     contextClear: "Clear context",
@@ -237,8 +232,6 @@ const chatCopy: Record<
       `Mandami il tuo dubbio su ${name} — so già quale esercizio è.`,
     mealContextHint: (name) =>
       `Dimmi cosa ti serve su ${name} — ho già il contesto del pasto.`,
-    exerciseDoubtTrigger: (name) => `Ho un dubbio su ${name}.`,
-    mealDoubtTrigger: (name) => `Ho un dubbio su ${name} in questo pasto.`,
     exerciseInputPlaceholder: "Es.: attrezzo occupato, come eseguire, cambiare esercizio…",
     mealInputPlaceholder: "Es.: non ce l'ho, quanto sostituto, cambiare alimento…",
     contextClear: "Esci dal contesto",
@@ -631,6 +624,7 @@ export function ChatTab({
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const voiceQueueRef = useRef<GutoVoiceQueue | null>(null)
   const messagesRef = useRef<Message[]>(messages)
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null)
   const speechTranscriptRef = useRef("")
@@ -658,6 +652,13 @@ export function ChatTab({
   const pendingExpectedResponseRef = useRef<GutoExpectedResponse | null>(initialChatState.expectedResponse)
   const pendingExpectedResponseMessageIdRef = useRef<string | null>(initialChatState.expectedResponseMessageId)
   const previousMessagesLengthRef = useRef(messages.length)
+
+  const getVoiceQueue = useCallback(() => {
+    if (!voiceQueueRef.current) {
+      voiceQueueRef.current = new GutoVoiceQueue({ source: "chat" })
+    }
+    return voiceQueueRef.current
+  }, [])
 
   useEffect(() => {
     if (messages.length > previousMessagesLengthRef.current) {
@@ -890,7 +891,7 @@ export function ChatTab({
 
   useEffect(() => {
     return () => {
-      gutoVoice.stop()
+      voiceQueueRef.current?.destroy()
     }
   }, [])
 
@@ -899,26 +900,17 @@ export function ChatTab({
     setIsSending(false)
   }, [])
 
-  const synthesizeAndPlay = useCallback(async (text: string, lang: SupportedLanguage) => {
+  const synthesizeAndPlay = useCallback((text: string, lang: string) => {
     stopTypingLoop()
-    console.info("[GUTO_VOICE] speak", { language: lang, textLength: text.length, source: "chat" })
-    try {
-      await gutoVoice.speak({
-        text,
-        language: lang,
-        source: "chat",
-        preferStatic: false,
-        onStart: () => {
-          stopTypingLoop()
-          setIsSpeaking(true)
-        },
-        onEnd: () => setIsSpeaking(false),
-      })
-    } finally {
-      stopTypingLoop()
-      setIsSpeaking(false)
-    }
-  }, [stopTypingLoop])
+    getVoiceQueue().enqueue({
+      ...createChatVoiceItem(text, lang),
+      onStart: () => {
+        stopTypingLoop()
+        setIsSpeaking(true)
+      },
+      onEnd: () => setIsSpeaking(false),
+    })
+  }, [getVoiceQueue, stopTypingLoop])
 
   const checkProactiveMessage = useCallback(async (forceArrivalBriefing = false) => {
     if (proactiveInFlightRef.current || sendInFlightRef.current) return
@@ -1227,7 +1219,7 @@ export function ChatTab({
 
     // Enviar uma nova mensagem INTERROMPE a fala atual do GUTO (não espera o TTS
     // terminar) — o usuário pode falar a qualquer momento.
-    gutoVoice.stop()
+    voiceQueueRef.current?.abort()
     setIsSpeaking(false)
 
     const safeLanguage = getLanguage(language) as SupportedLanguage
@@ -1408,13 +1400,9 @@ export function ChatTab({
     })
 
     onExerciseQuestionHandled?.()
-    void (async () => {
-      if (!isMuted) {
-        await synthesizeAndPlay(hintText, lang)
-      }
-      const trigger = copy.exerciseDoubtTrigger(exercise.name)
-      await sendTextToGuto(trigger, wrapWithActiveContext(trigger), { hideUserBubble: true })
-    })()
+    if (!isMuted) {
+      synthesizeAndPlay(hintText, lang)
+    }
     window.setTimeout(() => inputRef.current?.focus(), 120)
   }, [
     copy,
@@ -1422,11 +1410,9 @@ export function ChatTab({
     memory,
     onExerciseQuestionHandled,
     pendingExerciseQuestion,
-    sendTextToGuto,
     synthesizeAndPlay,
     validLang,
     workoutPlan,
-    wrapWithActiveContext,
   ])
 
   useEffect(() => {
@@ -1457,13 +1443,9 @@ export function ChatTab({
     })
 
     onFoodQuestionHandled?.()
-    void (async () => {
-      if (!isMuted) {
-        await synthesizeAndPlay(hintText, lang)
-      }
-      const trigger = copy.mealDoubtTrigger(food.name)
-      await sendTextToGuto(trigger, wrapWithActiveContext(trigger), { hideUserBubble: true })
-    })()
+    if (!isMuted) {
+      synthesizeAndPlay(hintText, lang)
+    }
     window.setTimeout(() => inputRef.current?.focus(), 120)
   }, [
     copy,
@@ -1471,10 +1453,8 @@ export function ChatTab({
     memory,
     onFoodQuestionHandled,
     pendingFoodQuestion,
-    sendTextToGuto,
     synthesizeAndPlay,
     validLang,
-    wrapWithActiveContext,
   ])
 
   const handleSend = async () => {
@@ -1547,7 +1527,7 @@ export function ChatTab({
             } catch {}
 
             if (next) {
-              gutoVoice.stop()
+              voiceQueueRef.current?.abort()
               setIsSpeaking(false)
             } else if (!next) {
               const testPhrases: Record<SupportedLanguage, string> = {

@@ -21,7 +21,7 @@
  * registra a linha (para a UI/notificação consumir) e dispara o callback.
  */
 
-import { gutoVoice } from "@/lib/guto-voice/guto-voice-service"
+import { gutoVoice, type GutoVoiceSource, type SpeakGutoOptions } from "@/lib/guto-voice/guto-voice-service"
 import type { GutoVoiceMode } from "./guto-online-types"
 
 export type GutoVoicePriority = "interrupt" | "normal" | "low"
@@ -30,10 +30,21 @@ export interface GutoVoiceItem {
   intentKey: string
   text: string
   language: string
+  source?: GutoVoiceSource
   priority?: GutoVoicePriority
   preferStatic?: boolean
   onStart?: () => void
   onEnd?: () => void
+}
+
+interface GutoVoiceSpeaker {
+  speak: (options: SpeakGutoOptions) => Promise<unknown>
+  stop: () => void
+}
+
+interface GutoVoiceQueueOptions {
+  speaker?: GutoVoiceSpeaker
+  source?: GutoVoiceSource
 }
 
 interface InternalItem extends GutoVoiceItem {
@@ -50,6 +61,13 @@ export class GutoVoiceQueue {
   private recentlySaid: Array<{ key: string; at: number }> = []
   private mode: GutoVoiceMode = "enabled"
   private destroyed = false
+  private speaker: GutoVoiceSpeaker
+  private source: GutoVoiceSource
+
+  constructor(options: GutoVoiceQueueOptions = {}) {
+    this.speaker = options.speaker ?? gutoVoice
+    this.source = options.source ?? "online"
+  }
 
   setMode(mode: GutoVoiceMode) {
     if (this.mode === mode) return
@@ -87,7 +105,13 @@ export class GutoVoiceQueue {
     if (priority === "interrupt") {
       // Limpa o que está esperando, aborta o atual e fala já.
       this.queue = [internal]
-      this.abortCurrent()
+      const interrupted = this.abortCurrent()
+      if (interrupted) {
+        queueMicrotask(() => {
+          if (!this.destroyed) void this.drain()
+        })
+        return
+      }
     } else if (priority === "low" && this.currentId != null) {
       this.queue.push(internal)
       return
@@ -108,11 +132,13 @@ export class GutoVoiceQueue {
     this.abortCurrent()
   }
 
-  private abortCurrent() {
+  private abortCurrent(): boolean {
     if (this.currentId != null) {
-      gutoVoice.stop()
+      this.speaker.stop()
       this.currentId = null
+      return true
     }
+    return false
   }
 
   private async drain() {
@@ -128,11 +154,11 @@ export class GutoVoiceQueue {
       item.onStart?.()
 
       if (this.mode === "enabled") {
-        await gutoVoice.speak({
+        await this.speaker.speak({
           text: item.text,
           language: item.language,
           intentKey: item.intentKey,
-          source: "online",
+          source: item.source ?? this.source,
           preferStatic: item.preferStatic ?? false,
         })
       } else {
@@ -142,10 +168,13 @@ export class GutoVoiceQueue {
         await new Promise<void>((resolve) => setTimeout(resolve, 200))
       }
     } finally {
-      this.currentId = null
-      item.onEnd?.()
+      const isCurrentItem = this.currentId === item.id
+      if (isCurrentItem) {
+        this.currentId = null
+        item.onEnd?.()
+      }
       // continua drenando
-      if (!this.destroyed) void this.drain()
+      if (!this.destroyed && isCurrentItem) void this.drain()
     }
   }
 
