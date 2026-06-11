@@ -274,10 +274,15 @@ export interface DietProfile {
 }
 
 function parseDietPreference(foodRestrictionsNormalized: string, lang: ValidLanguage): string | null {
-  if (includesTerm(foodRestrictionsNormalized, "vegano") || hasWord(foodRestrictionsNormalized, "vegan")) {
+  // Substring, com a mesma semântica do gate nutricional do backend: cobre
+  // vegan/vegano/VEGANA/veganismo. A forma masculina exata deixava "vegana"
+  // sem chip enquanto a dieta gerada respeitava a restrição (smoke test
+  // DUDAAA). "vegetariano" não contém "vegan", então a precedência
+  // vegano-primeiro continua correta.
+  if (includesTerm(foodRestrictionsNormalized, "vegan")) {
     return PREFERENCE_COPY[lang].vegan
   }
-  if (includesTerm(foodRestrictionsNormalized, "vegetariano") || hasWord(foodRestrictionsNormalized, "vegetarian")) {
+  if (includesTerm(foodRestrictionsNormalized, "vegetarian")) {
     return PREFERENCE_COPY[lang].vegetarian
   }
   return null
@@ -293,6 +298,17 @@ function parseRestrictions(foodRestrictionsNormalized: string, lang: ValidLangua
   return labels
 }
 
+const RAW_RESTRICTION_CHIP_MAX = 48
+
+function rawRestrictionChip(raw: string): string {
+  const compact = raw.replace(/\s+/g, " ").trim()
+  const capped =
+    compact.length > RAW_RESTRICTION_CHIP_MAX
+      ? `${compact.slice(0, RAW_RESTRICTION_CHIP_MAX - 1).trimEnd()}…`
+      : compact
+  return capped.charAt(0).toUpperCase() + capped.slice(1)
+}
+
 export function buildDietProfile(memory: GutoMemory | null | undefined, language: ValidLanguage): DietProfile | null {
   if (!memory) return null
   const t = DIET_COPY[language]
@@ -304,6 +320,13 @@ export function buildDietProfile(memory: GutoMemory | null | undefined, language
   const preferenceLabel = restrictionsActive ? parseDietPreference(restrictionsNormalized, language) : null
   // Preferência (vegano/vegetariano) não é repetida na lista de restrições.
   const restrictionLabels = restrictionsActive ? parseRestrictions(restrictionsNormalized, language) : []
+
+  // Restrição declarada nunca fica invisível: se nenhum rótulo estruturado
+  // casou, o texto cru declarado vira o chip — sem inventar categoria e sem
+  // duplicar (só entra quando NADA estruturado foi exibido).
+  if (restrictionsActive && !preferenceLabel && restrictionLabels.length === 0) {
+    restrictionLabels.push(rawRestrictionChip(rawRestrictions))
+  }
 
   const goalLabel = memory.trainingGoal ? (GOAL_LABEL[language][memory.trainingGoal] || memory.trainingGoal) : null
   const countryLabel = memory.country?.trim() || null
