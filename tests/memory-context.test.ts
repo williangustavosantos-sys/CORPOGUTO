@@ -159,6 +159,54 @@ describe("buildDietProfile — perfil usado na dieta", () => {
   })
 })
 
+describe("buildDietProfile — restrição declarada nunca fica invisível (smoke test DUDAAA)", () => {
+  it("forma feminina 'vegana' gera o chip Vegano", () => {
+    const profile = buildDietProfile(mem({ foodRestrictions: "vegana", country: "Brasil", trainingGoal: "muscle_gain" }), "pt-BR")
+    assert.equal(profile!.preferenceLabel, "Vegano")
+  })
+
+  it("'sou vegana' (frase) gera o chip Vegano", () => {
+    const profile = buildDietProfile(mem({ foodRestrictions: "sou vegana", country: "Brasil", trainingGoal: "muscle_gain" }), "pt-BR")
+    assert.equal(profile!.preferenceLabel, "Vegano")
+  })
+
+  it("forma feminina 'vegetariana' gera o chip Vegetariano", () => {
+    const profile = buildDietProfile(mem({ foodRestrictions: "vegetariana", country: "Brasil", trainingGoal: "fat_loss" }), "pt-BR")
+    assert.equal(profile!.preferenceLabel, "Vegetariano")
+  })
+
+  it("'vegana' com restrição estruturada junto: preferência + chip, sem fallback duplicado", () => {
+    const profile = buildDietProfile(
+      mem({ foodRestrictions: "vegana e sem lactose", country: "Brasil", trainingGoal: "muscle_gain" }),
+      "pt-BR"
+    )
+    assert.equal(profile!.preferenceLabel, "Vegano")
+    assert.deepEqual(profile!.restrictionLabels, ["Sem lactose"])
+  })
+
+  it("restrição fora do allowlist ('alergia a kiwi') vira chip com o texto declarado", () => {
+    const profile = buildDietProfile(mem({ foodRestrictions: "alergia a kiwi", country: "Brasil", trainingGoal: "fat_loss" }), "pt-BR")
+    assert.equal(profile!.preferenceLabel, null)
+    assert.deepEqual(profile!.restrictionLabels, ["Alergia a kiwi"])
+  })
+
+  it("fallback NÃO dispara quando algo estruturado casou (não duplica texto)", () => {
+    const profile = buildDietProfile(
+      mem({ foodRestrictions: "não como peixe nem frutos do mar", country: "Brasil", trainingGoal: "fat_loss" }),
+      "pt-BR"
+    )
+    assert.deepEqual(profile!.restrictionLabels, ["Sem peixe"])
+  })
+
+  it("texto cru longo é truncado no chip de fallback", () => {
+    const longo = "não como nenhum tipo de fruta vermelha, morango, amora, framboesa e mirtilo"
+    const profile = buildDietProfile(mem({ foodRestrictions: longo, country: "Brasil", trainingGoal: "fat_loss" }), "pt-BR")
+    assert.equal(profile!.restrictionLabels.length, 1)
+    assert.ok(profile!.restrictionLabels[0].length <= 48)
+    assert.ok(profile!.restrictionLabels[0].endsWith("…"))
+  })
+})
+
 describe("separação treino × dieta (cenário Will: joelho + vegetariano + Itália)", () => {
   const will = mem({
     trainingPathology: "dor no joelho",
