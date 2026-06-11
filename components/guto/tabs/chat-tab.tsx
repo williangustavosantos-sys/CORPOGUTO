@@ -40,6 +40,10 @@ import {
   getProactiveMemoryUiCopy,
   hasActionableProactiveMemories,
 } from "@/lib/guto-proactivity-ui"
+import {
+  appendProactivityActionFalaMessage,
+  getProactivityActionMemoryPatch,
+} from "@/lib/guto-proactivity-action-result"
 import type { EvolutionStage, SupportedLanguage } from "@/types/contract"
 import type { GutoVitalStateResult } from "@/lib/guto-vital-state"
 
@@ -711,9 +715,22 @@ export function ChatTab({
 
   const applyProactiveActionResult = useCallback(
     (result?: GutoProactivityActionResult | null) => {
-      if (result?.memoryPatch && Object.keys(result.memoryPatch).length > 0) {
-        onMemoryPatch?.(result.memoryPatch)
+      const memoryPatch = getProactivityActionMemoryPatch(result)
+      if (memoryPatch) {
+        onMemoryPatch?.(memoryPatch)
       }
+
+      const messageId = `g-proactivity-action-${Date.now()}`
+      const timestamp = new Date()
+      setMessages((prev) =>
+        appendProactivityActionFalaMessage(prev, result, (fala) => ({
+          id: messageId,
+          text: fala,
+          isGuto: true,
+          timestamp,
+          avatarEmotion: "default",
+        })),
+      )
     },
     [onMemoryPatch]
   )
