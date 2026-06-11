@@ -612,6 +612,7 @@ export interface GutoProactivityActionResult {
   ok: boolean
   memory?: ProactiveMemory
   impact?: ProactiveImpact | null
+  fala?: string
   memoryPatch?: Partial<GutoMemory>
   ignored?: boolean
 }
