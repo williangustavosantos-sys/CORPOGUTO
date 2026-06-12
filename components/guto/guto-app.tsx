@@ -38,6 +38,7 @@ import {
   hasCompleteGutoCalibration,
   isGenericGutoName,
   resolveGutoLanguage,
+  isSupportedGutoLanguage,
   isNoPainPathology,
   resolveGutoProfile,
   type StoredGutoProfile,
@@ -975,6 +976,16 @@ export function GutoApp({
       } else if (savedEntryMode === "invite") {
         removeStorageItem(ENTRY_MODE_KEY)
       } else {
+        // Idioma é lei: quem já escolheu idioma não vê o seletor de novo ao reabrir —
+        // vai direto para o login no idioma salvo (não repergunta o idioma toda vez).
+        const alreadyChoseLanguage =
+          isSupportedGutoLanguage(readStorageItem(SELECTED_LANGUAGE_KEY)) ||
+          isSupportedGutoLanguage(readStorageItem(ONBOARDING_LANGUAGE_KEY))
+        if (skipIntro && alreadyChoseLanguage) {
+          setIsHydrated(true)
+          router.replace(`/login?lang=${savedLang}`)
+          return
+        }
         setStage(getPublicEntryStage(false, skipIntro))
       }
       setIsHydrated(true)
@@ -1071,7 +1082,16 @@ export function GutoApp({
         const resolvedName = resolvedProfile.displayName
 
         setSelectedLanguage(persistedLanguage)
-        writeStorageItem(SELECTED_LANGUAGE_KEY, persistedLanguage)
+        // Idioma é lei: o boot aplica o idioma resolvido, mas NUNCA sobrescreve uma
+        // escolha explícita já salva com o fallback pt-BR. Só grava quando ainda não
+        // existe idioma salvo (primeira persistência), preservando a escolha do usuário
+        // mesmo que a memória do backend falhe ao carregar.
+        if (
+          isSupportedGutoLanguage(persistedLanguage) &&
+          !isSupportedGutoLanguage(readStorageItem(SELECTED_LANGUAGE_KEY))
+        ) {
+          writeStorageItem(SELECTED_LANGUAGE_KEY, persistedLanguage)
+        }
         if (process.env.NODE_ENV === "development") {
           console.info("[GUTO_LANGUAGE] applied in private app:", persistedLanguage)
         }
@@ -1116,7 +1136,7 @@ export function GutoApp({
       clearPactInterval()
       clearIntroSafetyTimer()
     }
-  }, [authLoading, clearIntroSafetyTimer, clearPactInterval, clearScheduled, language, persistMemory, persistProfile, skipIntro, user, userName])
+  }, [authLoading, clearIntroSafetyTimer, clearPactInterval, clearScheduled, language, persistMemory, persistProfile, router, skipIntro, user, userName])
 
   useEffect(() => {
     if (authLoading || !isHydrated) return

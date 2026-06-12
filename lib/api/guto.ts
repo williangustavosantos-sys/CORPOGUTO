@@ -297,6 +297,8 @@ export interface DietMeal {
 export interface DietPlan {
   userId: string
   title?: string
+  // Idioma em que o conteúdo visível foi gerado ("idioma é lei": regenera se mudar).
+  language?: string
   generatedAt: string
   country: string
   macros: DietMacros
@@ -566,10 +568,11 @@ export type ProactiveDecisionReason =
   | "travel"
   | "commitment"
   | "busy_week"
+  | "short_window"
   | "clear_week"
 
-export type ProactiveWorkoutEffect = "normal" | "short_light" | "minimal" | "ask_critical" | "coach_locked"
-export type ProactiveMissionEffect = "normal" | "reduced" | "protected_before" | "ask_critical" | "coach_locked"
+export type ProactiveWorkoutEffect = "normal" | "short_light" | "minimal" | "ask_critical" | "protected" | "coach_locked"
+export type ProactiveMissionEffect = "normal" | "reduced" | "protected_before" | "ask_critical" | "protected" | "coach_locked"
 export type ProactiveBlockedPeriod = "morning" | "afternoon" | "evening" | "night" | "all_day"
 
 export interface ProactiveDecision {
@@ -580,7 +583,7 @@ export interface ProactiveDecision {
   priority: number
   affectedDates: string[]
   blockedPeriod?: ProactiveBlockedPeriod
-  criticalQuestion?: "date" | "period" | "health_detail"
+  criticalQuestion?: "date" | "period" | "health_detail" | "training"
   workoutEffect: ProactiveWorkoutEffect
   missionEffect: ProactiveMissionEffect
   message: string

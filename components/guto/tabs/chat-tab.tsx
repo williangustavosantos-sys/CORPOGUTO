@@ -317,7 +317,8 @@ function markOpenedWeeklyThisWeek(userId: string): void {
 function hasDeliveredArrivalBriefing(userId: string): boolean {
   if (typeof window === "undefined") return false
   try {
-    return window.localStorage.getItem(`${ARRIVAL_BRIEFING_DELIVERED_KEY_PREFIX}:${userId}`) === "1"
+    const day = getGutoDateKey()
+    return window.localStorage.getItem(`${ARRIVAL_BRIEFING_DELIVERED_KEY_PREFIX}:${userId}:${day}`) === "1"
   } catch {
     return false
   }
@@ -326,8 +327,23 @@ function hasDeliveredArrivalBriefing(userId: string): boolean {
 function markDeliveredArrivalBriefing(userId: string): void {
   if (typeof window === "undefined") return
   try {
-    window.localStorage.setItem(`${ARRIVAL_BRIEFING_DELIVERED_KEY_PREFIX}:${userId}`, "1")
+    const day = getGutoDateKey()
+    window.localStorage.setItem(`${ARRIVAL_BRIEFING_DELIVERED_KEY_PREFIX}:${userId}:${day}`, "1")
   } catch {}
+}
+
+function hasWorkoutPlanExercises(plan?: GutoWorkoutPlan | null) {
+  return Boolean(plan?.exercises?.length)
+}
+
+function hasArrivalContext(memory?: GutoMemory | null, workoutPlan?: GutoWorkoutPlan | null) {
+  if (hasWorkoutPlanExercises(workoutPlan) || hasWorkoutPlanExercises(memory?.lastWorkoutPlan)) return true
+  const day = getGutoDateKey()
+  return Boolean(
+    memory?.proactiveImpacts?.some((impact) =>
+      impact.status === "active" && impact.affectedDates.some((date) => date >= day)
+    )
+  )
 }
 
 function getProactivityActionKey(userId: string, action: GutoProactiveMemoryAction): string {
@@ -937,6 +953,7 @@ export function ChatTab({
         if (forceArrivalBriefing) {
           pendingExpectedResponseRef.current = null
           pendingExpectedResponseMessageIdRef.current = null
+          markDeliveredArrivalBriefing(userId)
         }
         return
       }
@@ -1043,6 +1060,11 @@ export function ChatTab({
     }
     const shouldForceArrivalBriefing = shouldForceArrivalBriefingRef.current
     shouldForceArrivalBriefingRef.current = false
+    const needsContextualArrival =
+      calibrationComplete &&
+      !memory?.trainedToday &&
+      hasArrivalContext(memory, workoutPlan) &&
+      !hasDeliveredArrivalBriefing(userId)
     const needsFirstArrival =
       calibrationComplete &&
       !hasDeliveredArrivalBriefing(userId) &&
@@ -1050,13 +1072,14 @@ export function ChatTab({
 
     if (
       !shouldForceArrivalBriefing &&
+      !needsContextualArrival &&
       !needsFirstArrival &&
       hasDeliveredArrivalBriefing(userId) &&
       !hasOpenedWeeklyThisWeek(userId)
     ) {
       void deliverWeeklyOpeningIfNeeded()
     } else {
-      void checkProactiveMessage(shouldForceArrivalBriefing || needsFirstArrival)
+      void checkProactiveMessage(shouldForceArrivalBriefing || needsFirstArrival || needsContextualArrival)
     }
 
     const timer = window.setInterval(() => {
@@ -1070,7 +1093,8 @@ export function ChatTab({
     deliverWeeklyOpeningIfNeeded,
     initialXpGranted,
     initialXpRewardSeen,
-    memory?.hasSeenChatOpening,
+    memory,
+    workoutPlan,
     userId,
   ])
 

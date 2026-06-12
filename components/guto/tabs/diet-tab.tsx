@@ -178,6 +178,18 @@ function getWeekRange(generatedAt: string, language: ValidLanguage): string {
   return `${fmt(start)} – ${fmt(end)}`
 }
 
+// Regenera a dieta IA quando o idioma do plano difere do idioma atual do app.
+// Planos do coach/manuais são preservados (nunca sobrescritos). Planos legados
+// sem carimbo de idioma só regeneram para idiomas não-default, evitando refazer
+// dietas pt-BR válidas à toa.
+function isDietLanguageStale(plan: DietPlan, language: ValidLanguage): boolean {
+  if (plan.lockedByCoach || plan.manualOverride || plan.source === "coach_manual" || plan.source === "mixed") {
+    return false
+  }
+  if (plan.language) return plan.language !== language
+  return language !== "pt-BR"
+}
+
 function isMissingProfileError(error: unknown) {
   if (typeof error !== "object" || error === null || !("details" in error)) return false
   const details = (error as { details?: unknown }).details
@@ -570,6 +582,9 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
         if (cancelled) return
 
         if (fetched && isPlanStale(fetched.generatedAt)) fetched = null
+        // "Idioma é lei": uma dieta IA gerada noutro idioma não pode aparecer em
+        // português num app italiano. Plano do coach/manual é preservado.
+        if (fetched && isDietLanguageStale(fetched, validLang)) fetched = null
 
         if (!fetched) {
           if (!isProfileCompleteFor(latestMemoryRef.current)) {

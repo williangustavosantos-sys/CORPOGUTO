@@ -257,6 +257,10 @@ function isRemoteCacheable(text: string) {
 class GutoVoiceService {
   private resolver: VoiceResolver | null = null
   private currentAudio: HTMLAudioElement | null = null
+  // Token monotônico: toda nova fala (ou stop) o incrementa. Uma fala que estava
+  // "em voo" (ex: síntese remota lenta) descarta a si mesma se um speak/stop mais
+  // novo já passou — garante UMA voz e que fala antiga nunca toca depois da nova.
+  private playToken = 0
 
   private getResolver() {
     if (!this.resolver) {
@@ -267,6 +271,7 @@ class GutoVoiceService {
 
   stop() {
     if (!isBrowser()) return
+    this.playToken += 1
     window.speechSynthesis?.cancel()
     if (this.currentAudio) {
       this.currentAudio.pause()
@@ -296,6 +301,16 @@ class GutoVoiceService {
 
     onStart?.()
     this.stop()
+    // Esta fala passa a ser a vigente. Se um speak/stop mais novo chegar enquanto
+    // esperamos cache/síntese remota, abortamos antes de tocar — nada de voz dupla
+    // nem fala antiga tocando depois da nova.
+    const myToken = this.playToken
+    const isStale = () => myToken !== this.playToken
+    const supersededResult: GutoVoiceResult = {
+      mode: "silent",
+      voiceId: getVoiceId(),
+      voiceVersion: getVoiceVersion(),
+    }
 
     try {
       if (intentKey && preferStatic) {
@@ -304,6 +319,7 @@ class GutoVoiceService {
         saveVoiceState(resolver.getState())
 
         if (voiceSource.kind === "file") {
+          if (isStale()) return supersededResult
           const played = await this.playFile(voiceSource.url)
           if (played) {
             return {
@@ -319,6 +335,7 @@ class GutoVoiceService {
       const cacheKey = await this.cacheKey({ text, language })
       const cached = await getCachedAudio(cacheKey)
       if (cached) {
+        if (isStale()) return supersededResult
         await touchCachedAudio(cached)
         await this.playBlob(cached.blob)
         return {
@@ -334,6 +351,7 @@ class GutoVoiceService {
       if (allowRemoteSynthesis && isRemoteCacheable(text)) {
         const generated = await this.generateRemoteAudio({ text, language, source, cacheKey })
         if (generated) {
+          if (isStale()) return supersededResult
           await this.playBlob(generated.blob)
           return {
             mode: "remote-saved",
@@ -346,6 +364,7 @@ class GutoVoiceService {
         }
       }
 
+      if (isStale()) return supersededResult
       await speakWithBrowser(text, language)
       return {
         mode: "browser-fallback",
