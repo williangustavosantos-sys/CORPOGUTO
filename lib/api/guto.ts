@@ -297,6 +297,8 @@ export interface DietMeal {
 export interface DietPlan {
   userId: string
   title?: string
+  // Idioma em que o conteúdo visível foi gerado ("idioma é lei": regenera se mudar).
+  language?: string
   generatedAt: string
   country: string
   macros: DietMacros
