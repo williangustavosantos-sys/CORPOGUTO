@@ -387,11 +387,19 @@ function Header({ onMobileMenu }: { onMobileMenu: () => void }) {
       )
     }
     if (ctaKind === "aluno") {
+      const limitTitle = studentLimitReached
+        ? lang === "en-US"
+          ? "Student limit reached for this company"
+          : lang === "it-IT"
+            ? "Limite di allievi raggiunto per questa azienda"
+            : "Limite de alunos atingido para esta empresa"
+        : undefined
       return (
         <Btn
           cyan
           sm
           disabled={studentLimitReached}
+          title={limitTitle}
           onClick={() => {
             setStudentDraft({
               name: "",
