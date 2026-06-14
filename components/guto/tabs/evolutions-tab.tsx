@@ -18,9 +18,21 @@ interface EvolutionsTabProps {
 }
 
 const evolutionCopy = {
-  "pt-BR": { desire: "Desejo em camadas", active: "Ativo", released: "Forma liberada. Nitidez total no presente.", blocked: "Bloqueado até" },
-  "en-US": { desire: "Desire in layers", active: "Active", released: "Form unlocked. Full sharpness in the present.", blocked: "Locked until" },
-  "it-IT": { desire: "Desiderio a strati", active: "Attivo", released: "Forma sbloccata. Nitidezza totale nel presente.", blocked: "Bloccato fino a" },
+  "pt-BR": {
+    desire: "Desejo em camadas", active: "Ativo",
+    released: "Forma liberada. Nitidez total no presente.", blocked: "Bloqueado até",
+    workoutsTo: (n: number, stage: string) => `${n} treino${n === 1 ? "" : "s"} para ${stage}`,
+  },
+  "en-US": {
+    desire: "Desire in layers", active: "Active",
+    released: "Form unlocked. Full sharpness in the present.", blocked: "Locked until",
+    workoutsTo: (n: number, stage: string) => `${n} workout${n === 1 ? "" : "s"} to ${stage}`,
+  },
+  "it-IT": {
+    desire: "Desiderio a strati", active: "Attivo",
+    released: "Forma sbloccata. Nitidezza totale nel presente.", blocked: "Bloccato fino a",
+    workoutsTo: (n: number, stage: string) => `${n} allenament${n === 1 ? "o" : "i"} per ${stage}`,
+  },
 } as const
 
 export function EvolutionsTab({ language, currentEvolution, memory }: EvolutionsTabProps) {
@@ -30,6 +42,10 @@ export function EvolutionsTab({ language, currentEvolution, memory }: Evolutions
   const currentXp = memory?.totalXp ?? 0
   const nextTargetXp = getNextGutoEvolutionXp(currentXp) ?? currentXp
   const progress = nextTargetXp > 0 ? Math.min(100, (currentXp / nextTargetXp) * 100) : 100
+  const nextCard = evolutionCardsFixture.find((card) => card.requiredXp > currentXp)
+  const workoutsRemaining = nextCard && nextTargetXp > currentXp
+    ? Math.ceil((nextTargetXp - currentXp) / 100)
+    : 0
 
   return (
     <div className="flex h-full flex-col pb-4">
@@ -166,7 +182,11 @@ export function EvolutionsTab({ language, currentEvolution, memory }: Evolutions
             </div>
 
             <div className="mt-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-[rgba(13,35,65,0.4)]">
-              <span>{locale.nextEvolution}</span>
+              <span>
+                {workoutsRemaining > 0 && nextCard
+                  ? copy.workoutsTo(workoutsRemaining, nextCard.label)
+                  : locale.nextEvolution}
+              </span>
               <span>{nextTargetXp.toLocaleString()} XP</span>
             </div>
           </div>
