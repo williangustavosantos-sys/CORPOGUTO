@@ -118,7 +118,13 @@ export interface GutoExpectedResponse {
   type: "text"
   options?: string[]
   instruction?: string
-  context?: "training_schedule" | "training_location" | "training_status" | "training_limitations" | "limitation_check"
+  context?:
+    | "training_schedule"
+    | "training_location"
+    | "training_status"
+    | "training_limitations"
+    | "limitation_check"
+    | "travel_training"
 }
 
 export interface SendGutoMessageRequest {

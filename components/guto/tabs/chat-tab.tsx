@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Image from "next/image"
 import { AnimatePresence, motion } from "framer-motion"
-import { Loader2, Mic, Send, TrendingUp, Volume2, VolumeX } from "lucide-react"
+import { Dumbbell, Loader2, Mic, Send, TrendingUp, UtensilsCrossed, Volume2, VolumeX } from "lucide-react"
 
 import { getApiErrorMessage } from "@/lib/api/client"
 import {
@@ -161,6 +161,11 @@ const chatCopy: Record<
     contextClear: string
     opening: (name: string) => string
     weeklyOpening: (name: string) => string
+    conversationActive: string
+    visualMemoryHint: string
+    voiceOn: string
+    voiceOff: string
+    quickReplyLabel: string
   }
 > = {
   "pt-BR": {
@@ -187,6 +192,11 @@ const chatCopy: Record<
     contextClear: "Sair do contexto",
     opening: (name) => `Finalmente${name ? `, ${name}` : ""}. Tava te esperando. Enquanto isso, já organizei nosso plano daqui pra frente. Estamos juntos — bora começar?`,
     weeklyOpening: (name) => `${name ? `${name}, ` : ""}antes da gente sair no automático: como tá tua semana? Me fala se tem viagem, horário apertado, dor ou algum compromisso que pode mexer no treino.`,
+    conversationActive: "Conversa ativa",
+    visualMemoryHint: "Decisões aparecem no Percurso",
+    voiceOn: "VOZ ON",
+    voiceOff: "VOZ OFF",
+    quickReplyLabel: "Resposta rápida",
   },
   "en-US": {
     channel: "Oracle channel",
@@ -212,6 +222,11 @@ const chatCopy: Record<
     contextClear: "Clear context",
     opening: (name) => `Finally${name ? `, ${name}` : ""}. I was waiting for you. In the meantime, I already organized our plan from here. I'm with you — ready to start?`,
     weeklyOpening: (name) => `${name ? `${name}, ` : ""}before we go on autopilot: how is your week looking? Tell me if there is travel, a tight schedule, pain, or anything that can affect training.`,
+    conversationActive: "Active conversation",
+    visualMemoryHint: "Decisions appear in Journey",
+    voiceOn: "VOICE ON",
+    voiceOff: "VOICE OFF",
+    quickReplyLabel: "Quick reply",
   },
   "it-IT": {
     channel: "Canale dell'oracolo",
@@ -237,6 +252,11 @@ const chatCopy: Record<
     contextClear: "Esci dal contesto",
     opening: (name) => `Finalmente${name ? `, ${name}` : ""}. Ti stavo aspettando. Nel frattempo ho già organizzato il nostro piano da qui in avanti. Sono con te — iniziamo?`,
     weeklyOpening: (name) => `${name ? `${name}, ` : ""}prima di andare in automatico: com'è la tua settimana? Dimmi se hai viaggio, orari stretti, dolore o impegni che possono cambiare l'allenamento.`,
+    conversationActive: "Conversazione attiva",
+    visualMemoryHint: "Le decisioni appaiono nel Percorso",
+    voiceOn: "VOCE ON",
+    voiceOff: "VOCE OFF",
+    quickReplyLabel: "Risposta rapida",
   },
 }
 
@@ -466,7 +486,7 @@ function readStoredChatState(userId: string): StoredChatState | null {
     const messages = Array.isArray(parsed.messages)
       ? parsed.messages
           .filter((message) => typeof message.text === "string" && typeof message.id === "string")
-          .slice(-24)
+          .slice(-80)
           .map((message) => ({
             ...message,
             timestamp: message.timestamp ? new Date(message.timestamp) : new Date(),
@@ -494,7 +514,7 @@ function writeStoredChatState(userId: string, state: StoredChatState) {
     window.localStorage.setItem(
       getChatStateKey(userId),
       JSON.stringify({
-        messages: state.messages.slice(-24).map((message) => ({
+        messages: state.messages.slice(-80).map((message) => ({
           ...message,
           timestamp: message.timestamp.toISOString(),
         })),
@@ -637,6 +657,10 @@ export function ChatTab({
   const [showInitialXpCard, setShowInitialXpCard] = useState(false)
   const [contextChip, setContextChip] = useState<{ type: "exercise" | "meal"; label: string } | null>(null)
   const [proactiveMemories, setProactiveMemories] = useState<ProactiveMemory[]>([])
+  const [expectedResponse, setExpectedResponse] = useState<GutoExpectedResponse | null>(initialChatState.expectedResponse)
+  const [expectedResponseMessageId, setExpectedResponseMessageId] = useState<string | null>(
+    initialChatState.expectedResponseMessageId
+  )
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -668,6 +692,13 @@ export function ChatTab({
   const pendingExpectedResponseRef = useRef<GutoExpectedResponse | null>(initialChatState.expectedResponse)
   const pendingExpectedResponseMessageIdRef = useRef<string | null>(initialChatState.expectedResponseMessageId)
   const previousMessagesLengthRef = useRef(messages.length)
+
+  const syncExpectedResponse = useCallback((next: GutoExpectedResponse | null, messageId: string | null) => {
+    pendingExpectedResponseRef.current = next
+    pendingExpectedResponseMessageIdRef.current = messageId
+    setExpectedResponse(next)
+    setExpectedResponseMessageId(messageId)
+  }, [])
 
   const getVoiceQueue = useCallback(() => {
     if (!voiceQueueRef.current) {
@@ -702,7 +733,7 @@ export function ChatTab({
       expectedResponse: pendingExpectedResponseRef.current,
       expectedResponseMessageId: pendingExpectedResponseMessageIdRef.current,
     })
-  }, [messages, userId])
+  }, [expectedResponse, expectedResponseMessageId, messages, userId])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -951,8 +982,7 @@ export function ChatTab({
       const fala = data.fala?.trim()
       if (!data.due || !fala) {
         if (forceArrivalBriefing) {
-          pendingExpectedResponseRef.current = null
-          pendingExpectedResponseMessageIdRef.current = null
+          syncExpectedResponse(null, null)
           markDeliveredArrivalBriefing(userId)
         }
         return
@@ -971,8 +1001,7 @@ export function ChatTab({
         avatarEmotion: normalizeAvatarEmotion(data.avatarEmotion),
       }
 
-      pendingExpectedResponseRef.current = data.expectedResponse || null
-      pendingExpectedResponseMessageIdRef.current = data.expectedResponse ? messageId : null
+      syncExpectedResponse(data.expectedResponse || null, data.expectedResponse ? messageId : null)
 
       setMessages((prev) => {
         if (forceArrivalBriefing && prev.length === 0) {
@@ -1001,7 +1030,7 @@ export function ChatTab({
       proactiveInFlightRef.current = false
       if (forceArrivalBriefing) setIsSending(false)
     }
-  }, [isMuted, language, onWorkoutPlanUpdated, synthesizeAndPlay, userId])
+  }, [isMuted, language, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
 
   const deliverWeeklyOpeningIfNeeded = useCallback(async () => {
     if (weeklyDeferredThisSessionRef.current) return
@@ -1299,8 +1328,7 @@ export function ChatTab({
 
       const fala = data?.fala?.trim() || copy.emptyResponseFallback
       const messageId = `g-${Date.now()}`
-      pendingExpectedResponseRef.current = data?.expectedResponse || null
-      pendingExpectedResponseMessageIdRef.current = data?.expectedResponse ? messageId : null
+      syncExpectedResponse(data?.expectedResponse || null, data?.expectedResponse ? messageId : null)
 
       const gutoMessage: Message = {
         id: messageId,
@@ -1351,8 +1379,7 @@ export function ChatTab({
         void synthesizeAndPlay(fala, safeLanguage)
       }
     } catch {
-      pendingExpectedResponseRef.current = null
-      pendingExpectedResponseMessageIdRef.current = null
+      syncExpectedResponse(null, null)
       stopTypingLoop()
       setMessages((prev) => [
         ...prev,
@@ -1380,6 +1407,7 @@ export function ChatTab({
     onWorkoutPlanUpdated,
     synthesizeAndPlay,
     stopTypingLoop,
+    syncExpectedResponse,
     triggerProactivityExtraction,
     userId,
     userName,
@@ -1487,7 +1515,47 @@ export function ChatTab({
     await sendTextToGuto(text, wrapWithActiveContext(text))
   }
 
-  const visibleMessages = messages.slice(-8)
+  const resolveQuickReplyModelInput = useCallback(
+    (option: string, response: GutoExpectedResponse | null) => {
+      if (response?.context !== "travel_training") return option
+      const normalized = option
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim()
+        .toLocaleLowerCase(validLang)
+      const isYes = normalized === "sim" || normalized === "yes" || normalized === "si"
+      const positive: Record<SupportedLanguage, string> = {
+        "pt-BR": "consigo treinar na viagem",
+        "en-US": "I can train during the trip",
+        "it-IT": "riesco ad allenarmi in viaggio",
+      }
+      const negative: Record<SupportedLanguage, string> = {
+        "pt-BR": "não vou conseguir treinar na viagem",
+        "en-US": "I cannot train during the trip",
+        "it-IT": "non riesco ad allenarmi in viaggio",
+      }
+      return isYes ? positive[validLang as SupportedLanguage] : negative[validLang as SupportedLanguage]
+    },
+    [validLang]
+  )
+
+  const handleQuickReply = useCallback(
+    async (option: string, response: GutoExpectedResponse) => {
+      if (isSending) return
+      const displayText = option.trim()
+      const modelText = resolveQuickReplyModelInput(displayText, response)
+      await sendTextToGuto(displayText, wrapWithActiveContext(modelText))
+    },
+    [isSending, resolveQuickReplyModelInput, sendTextToGuto, wrapWithActiveContext]
+  )
+
+  const visibleMessages = messages
+  const latestGutoMessage = [...messages].reverse().find((message) => message.isGuto)
+  const activeExpectedResponse =
+    expectedResponse && expectedResponseMessageId && latestGutoMessage?.id === expectedResponseMessageId
+      ? expectedResponse
+      : null
+  const quickReplyOptions = activeExpectedResponse?.options?.filter((option) => option.trim()) ?? []
   const proactiveUi = useMemo(() => getProactiveMemoryUiCopy(validLang), [validLang])
   const actionableProactive = useMemo(
     () => getActionableProactiveMemories(proactiveMemories),
@@ -1632,37 +1700,62 @@ export function ChatTab({
         )}
       </AnimatePresence>
 
-      {/* Avatar — ancorado na base. Opacidade reduz conforme dias de ausência (Tamagotchi). */}
-      <div className="guto-chat-avatar-stage absolute z-10 flex flex-col items-center justify-end pb-[clamp(16px,4vh,32px)]">
-        <div
-          className="relative flex w-[clamp(320px,96vw,440px)] flex-col items-center justify-end transition-opacity duration-1000"
-          style={{ opacity: vitalState?.opacity ?? 1 }}
-        >
-          <GutoAvatarController
-            stage={evolution}
-            size="xl"
-            showPlatform={false}
-            isActive={isAvatarActive}
-          />
+      {!isKeyboardOpen && (
+        <div className="guto-chat-presence absolute z-30">
+          <div className="flex items-center gap-3 rounded-[22px] border border-[rgba(82,231,255,0.38)] bg-white/80 px-3 py-2 shadow-[0_14px_34px_rgba(82,231,255,0.12)] backdrop-blur-[18px]">
+            <div
+              className="guto-chat-presence-avatar flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full"
+              style={{ opacity: vitalState?.opacity ?? 1 }}
+            >
+              <GutoAvatarController
+                stage={evolution}
+                size="sm"
+                showPlatform={false}
+                isActive={isAvatarActive}
+                interactive={false}
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="font-mono text-[9px] font-black uppercase tracking-[0.2em] text-(--guto-cyan)">
+                {copy.conversationActive}
+              </p>
+              <p className="mt-1 truncate text-[12px] font-black leading-tight text-(--guto-navy)">
+                {brandName ? `GUTO & ${brandName}` : "GUTO"}
+              </p>
+              <p className="mt-0.5 truncate font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-[rgba(13,35,65,0.44)]">
+                {copy.visualMemoryHint}
+              </p>
+            </div>
+            <span
+              className="shrink-0 rounded-full border border-[rgba(82,231,255,0.36)] px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-[0.08em] text-[rgba(13,35,65,0.58)]"
+              aria-hidden="true"
+            >
+              {isMuted ? copy.voiceOff : copy.voiceOn}
+            </span>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Mensagens — z-30 flutua sobre o avatar/cápsula como camada holográfica */}
+      {/* Mensagens — camada principal da aba GUTO: histórico natural, não vitrine do avatar. */}
       <div
         ref={scrollRef}
-        className="guto-chat-list absolute left-0 right-0 top-[54%] z-30 overflow-y-auto px-5 pb-3"
-        style={{ bottom: `calc(var(--guto-chat-input-bottom) + ${dockHeight + 16}px)` }}
+        className="guto-chat-list absolute left-0 right-0 z-30 overflow-y-auto px-5 pb-3 pt-1"
+        style={{
+          top: "calc(var(--guto-chat-header-top) + var(--guto-chat-header-height) + 92px)",
+          bottom: `calc(var(--guto-chat-input-bottom) + ${dockHeight + 16}px)`,
+        }}
       >
-        <motion.div className="flex min-h-full flex-col justify-end gap-3">
+        <motion.div className="flex min-h-full flex-col justify-end gap-2.5">
           {visibleMessages.map((message) => (
             <motion.div
               key={message.id}
+              data-testid={message.isGuto ? "guto-message" : "user-message"}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               className={
                 message.isGuto
-                  ? "mx-auto w-full max-w-[20rem] rounded-[20px] border border-[rgba(82,231,255,0.72)] px-4 py-3 text-center font-mono text-[clamp(11px,2.8vw,13px)] font-black leading-snug text-(--guto-navy)"
-                  : "ml-auto max-w-[70%] rounded-[18px] border border-white/80 bg-white/90 px-4 py-2 text-right text-xs font-semibold leading-snug text-[rgba(13,35,65,0.68)] shadow-[0_12px_26px_rgba(137,151,168,0.1)]"
+                  ? "mr-auto w-fit max-w-[82%] rounded-[20px] border border-[rgba(82,231,255,0.62)] px-4 py-3 text-left font-mono text-[clamp(11px,2.8vw,13px)] font-black leading-snug text-(--guto-navy)"
+                  : "ml-auto w-fit max-w-[78%] rounded-[18px] border border-white/80 bg-white/90 px-4 py-2 text-right text-xs font-semibold leading-snug text-[rgba(13,35,65,0.68)] shadow-[0_12px_26px_rgba(137,151,168,0.1)]"
               }
               style={message.isGuto ? {
                 background: "linear-gradient(180deg, rgba(255,255,255,0.88) 0%, rgba(248,251,255,0.82) 100%)",
@@ -1752,14 +1845,40 @@ export function ChatTab({
         </motion.div>
       )}
 
+      {quickReplyOptions.length > 0 && activeExpectedResponse && (
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex w-full flex-wrap gap-2 rounded-[18px] border border-[rgba(82,231,255,0.38)] bg-white/92 p-2 shadow-[0_8px_24px_rgba(82,231,255,0.14)]"
+        >
+          <span className="sr-only">{copy.quickReplyLabel}</span>
+          {quickReplyOptions.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => void handleQuickReply(option, activeExpectedResponse)}
+              disabled={isSending}
+              className="min-h-11 flex-1 rounded-full border border-[rgba(82,231,255,0.62)] bg-[rgba(82,231,255,0.16)] px-4 py-2 font-mono text-[11px] font-black uppercase tracking-[0.16em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.18)] disabled:opacity-45"
+            >
+              {option}
+            </button>
+          ))}
+        </motion.div>
+      )}
+
       {contextChip && (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           className="flex w-full items-center justify-between gap-2 rounded-full border border-[rgba(82,231,255,0.45)] bg-white/90 px-3 py-1.5 shadow-[0_8px_24px_rgba(82,231,255,0.12)]"
         >
-          <span className="min-w-0 truncate font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-navy)">
-            {contextChip.type === "exercise" ? "?" : "🍽"} {contextChip.label}
+          <span className="flex min-w-0 items-center gap-1.5 truncate font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-navy)">
+            {contextChip.type === "exercise" ? (
+              <Dumbbell className="h-3.5 w-3.5 shrink-0 text-(--guto-cyan)" aria-hidden="true" />
+            ) : (
+              <UtensilsCrossed className="h-3.5 w-3.5 shrink-0 text-(--guto-cyan)" aria-hidden="true" />
+            )}
+            <span className="truncate">{contextChip.label}</span>
           </span>
           <button
             type="button"
