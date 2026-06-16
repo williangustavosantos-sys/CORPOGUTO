@@ -15,7 +15,6 @@ import {
   generateDietPlan,
   getGutoProactive,
   getProactiveMemories,
-  openWeeklyConversation,
   requestDiscardProactiveMemory,
   sendGutoMessage,
   setActiveExercise,
@@ -160,7 +159,6 @@ const chatCopy: Record<
     mealInputPlaceholder: string
     contextClear: string
     opening: (name: string) => string
-    weeklyOpening: (name: string) => string
     conversationActive: string
     visualMemoryHint: string
     voiceOn: string
@@ -191,7 +189,6 @@ const chatCopy: Record<
     mealInputPlaceholder: "Ex.: não tenho isso, quanto de substituto, trocar alimento…",
     contextClear: "Sair do contexto",
     opening: (name) => `Finalmente${name ? `, ${name}` : ""}. Tava te esperando. Enquanto isso, já organizei nosso plano daqui pra frente. Estamos juntos — bora começar?`,
-    weeklyOpening: (name) => `${name ? `${name}, ` : ""}antes da gente sair no automático: como tá tua semana? Me fala se tem viagem, horário apertado, dor ou algum compromisso que pode mexer no treino.`,
     conversationActive: "Conversa ativa",
     visualMemoryHint: "Decisões aparecem no Percurso",
     voiceOn: "VOZ ON",
@@ -221,7 +218,6 @@ const chatCopy: Record<
     mealInputPlaceholder: "E.g. don't have this, how much substitute, swap food…",
     contextClear: "Clear context",
     opening: (name) => `Finally${name ? `, ${name}` : ""}. I was waiting for you. In the meantime, I already organized our plan from here. I'm with you — ready to start?`,
-    weeklyOpening: (name) => `${name ? `${name}, ` : ""}before we go on autopilot: how is your week looking? Tell me if there is travel, a tight schedule, pain, or anything that can affect training.`,
     conversationActive: "Active conversation",
     visualMemoryHint: "Decisions appear in Journey",
     voiceOn: "VOICE ON",
@@ -251,7 +247,6 @@ const chatCopy: Record<
     mealInputPlaceholder: "Es.: non ce l'ho, quanto sostituto, cambiare alimento…",
     contextClear: "Esci dal contesto",
     opening: (name) => `Finalmente${name ? `, ${name}` : ""}. Ti stavo aspettando. Nel frattempo ho già organizzato il nostro piano da qui in avanti. Sono con te — iniziamo?`,
-    weeklyOpening: (name) => `${name ? `${name}, ` : ""}prima di andare in automatico: com'è la tua settimana? Dimmi se hai viaggio, orari stretti, dolore o impegni che possono cambiare l'allenamento.`,
     conversationActive: "Conversazione attiva",
     visualMemoryHint: "Le decisioni appaiono nel Percorso",
     voiceOn: "VOCE ON",
@@ -269,12 +264,11 @@ const FIRST_MESSAGE_SENT_KEY_PREFIX = "guto-first-message-sent"
 const CHAT_STATE_KEY_PREFIX = "guto-chat-state"
 const INITIAL_XP_REWARD_SEEN_KEY_PREFIX = "guto-initial-xp-reward-seen"
 const PROACTIVITY_EXTRACTION_KEY_PREFIX = "guto-proactivity-extracted"
-const PROACTIVITY_WEEKLY_OPENED_KEY_PREFIX = "guto-proactivity-weekly-opened"
 const ARRIVAL_BRIEFING_DELIVERED_KEY_PREFIX = "guto-arrival-delivered"
 const PROACTIVITY_ACTION_KEY_PREFIX = "guto-proactivity-action"
 const GUTO_OPERATIONAL_TIME_ZONE = process.env.NEXT_PUBLIC_GUTO_TIME_ZONE || "Europe/Rome"
 // Minimum number of messages in chat (user + GUTO) before triggering extraction
-const PROACTIVITY_MIN_MESSAGES_FOR_EXTRACTION = 6
+const PROACTIVITY_MIN_MESSAGES_FOR_EXTRACTION = 2
 const PROACTIVITY_SUPPRESS_AFTER_WORKOUT_MS = 10 * 60 * 1000
 
 function getGutoDateKey(date = new Date()): string {
@@ -313,24 +307,6 @@ function markExtractedThisWeek(userId: string): void {
   try {
     const weekKey = getISOWeekKey()
     window.localStorage.setItem(`${PROACTIVITY_EXTRACTION_KEY_PREFIX}:${userId}:${weekKey}`, "1")
-  } catch {}
-}
-
-function hasOpenedWeeklyThisWeek(userId: string): boolean {
-  if (typeof window === "undefined") return false
-  try {
-    const weekKey = getISOWeekKey()
-    return window.localStorage.getItem(`${PROACTIVITY_WEEKLY_OPENED_KEY_PREFIX}:${userId}:${weekKey}`) === "1"
-  } catch {
-    return false
-  }
-}
-
-function markOpenedWeeklyThisWeek(userId: string): void {
-  if (typeof window === "undefined") return
-  try {
-    const weekKey = getISOWeekKey()
-    window.localStorage.setItem(`${PROACTIVITY_WEEKLY_OPENED_KEY_PREFIX}:${userId}:${weekKey}`, "1")
   } catch {}
 }
 
@@ -674,12 +650,10 @@ export function ChatTab({
   const activeDietContextRef = useRef<string | null>(null)
   const handledFoodQuestionRef = useRef<string | null>(null)
   const processedProactiveActionKeysRef = useRef<Set<string>>(new Set())
-  const weeklyOpeningInFlightRef = useRef(false)
   const proactiveInFlightRef = useRef(false)
   const sendInFlightRef = useRef(false)
   const lastProactiveKeyRef = useRef<string | null>(null)
   const arrivalBriefingRequestedRef = useRef(false)
-  const weeklyDeferredThisSessionRef = useRef(false)
   const suppressProactivityUntilRef = useRef(0)
   const dietGenerationAfterWorkoutRef = useRef(false)
   const shouldForceArrivalBriefingRef = useRef((() => {
@@ -752,13 +726,8 @@ export function ChatTab({
 
   const refreshProactiveMemories = useCallback(async () => {
     const memories = await getProactiveMemories()
-    // Bloco 2 / decisão do fundador: a confirmação de um evento novo (viagem etc.)
-    // é resolvida UMA vez, conversando no chat — o GUTO pergunta com as palavras
-    // dele. O card nunca pergunta a mesma coisa: ele só carrega validação da
-    // semana passada e descarte. (ver docs/GUTO_CONTEXT_AUDIT.md §7, Bloco 2.)
-    const cardMemories = memories.filter((item) => item.status !== "pending_confirmation")
-    setProactiveMemories(cardMemories)
-    return cardMemories
+    setProactiveMemories(memories)
+    return memories
   }, [])
 
   const applyProactiveActionResult = useCallback(
@@ -804,9 +773,9 @@ export function ChatTab({
   )
 
   const triggerProactivityExtraction = useCallback(
-    (safeLanguage: SupportedLanguage) => {
+    (safeLanguage: SupportedLanguage, extraMessages: Message[] = []) => {
       if (hasExtractedThisWeek(userId)) return
-      const currentMessages = messagesRef.current
+      const currentMessages = [...messagesRef.current, ...extraMessages]
       if (currentMessages.length < PROACTIVITY_MIN_MESSAGES_FOR_EXTRACTION) return
 
       const conversationText = currentMessages
@@ -877,7 +846,7 @@ export function ChatTab({
       gutoAudio.playGutoFeedback("success")
     }, 400)
     // Auto-dismiss em 6s — card de premiação não deve ficar travando o chat.
-    // O dismiss aciona o ciclo arrival/weeklyOpening em seguida.
+    // O dismiss aciona a chegada contextual do backend em seguida.
     const autoDismissTimer = window.setTimeout(() => {
       if (showInitialXpCardRef.current) {
         dismissInitialXpCardRef.current?.()
@@ -1018,7 +987,6 @@ export function ChatTab({
 
       if (data.slot === "arrival" || forceArrivalBriefing) {
         markDeliveredArrivalBriefing(userId)
-        weeklyDeferredThisSessionRef.current = true
       }
 
       if (!isMuted) {
@@ -1032,46 +1000,8 @@ export function ChatTab({
     }
   }, [isMuted, language, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
 
-  const deliverWeeklyOpeningIfNeeded = useCallback(async () => {
-    if (weeklyDeferredThisSessionRef.current) return
-    if (!hasDeliveredArrivalBriefing(userId) && !memory?.hasSeenChatOpening) return
-    if (weeklyOpeningInFlightRef.current || hasOpenedWeeklyThisWeek(userId)) return
-    weeklyOpeningInFlightRef.current = true
-
-    const safeLanguage = getLanguage(language) as SupportedLanguage
-    const weekKey = getISOWeekKey()
-    const messageId = `g-weekly-open-${userId}-${weekKey}`
-    const openingText = copy.weeklyOpening(brandName)
-
-    try {
-      await openWeeklyConversation()
-      markOpenedWeeklyThisWeek(userId)
-
-      setMessages((prev) => {
-        if (prev.some((message) => message.id === messageId)) return prev
-        return appendMessagesWithoutDuplicateGuto(prev, [
-          {
-            id: messageId,
-            text: openingText,
-            isGuto: true,
-            timestamp: new Date(),
-            avatarEmotion: "default",
-          },
-        ])
-      })
-
-      if (!isMuted) {
-        await synthesizeAndPlay(openingText, safeLanguage)
-      }
-    } catch (error) {
-      console.warn(`[GUTO][proactivity] weekly opening failed: ${getApiErrorMessage(error)}`)
-    } finally {
-      weeklyOpeningInFlightRef.current = false
-    }
-  }, [brandName, copy, isMuted, language, memory?.hasSeenChatOpening, synthesizeAndPlay, userId])
-
-  // Após o card +100 XP: só arrival (treino pronto). Abertura semanal fica
-  // para outra sessão — nunca no mesmo turno que "já montei o treino".
+  // Após o card +100 XP: a chegada passa pelo backend, que decide se precisa
+  // abrir contexto semanal antes de missão.
   const dismissInitialXpCard = useCallback(() => {
     setShowInitialXpCard(false)
     writeInitialXpRewardSeen(userId)
@@ -1098,18 +1028,18 @@ export function ChatTab({
       calibrationComplete &&
       !hasDeliveredArrivalBriefing(userId) &&
       !memory?.hasSeenChatOpening
+    const needsWeeklyArrivalProbe =
+      calibrationComplete &&
+      !hasDeliveredArrivalBriefing(userId) &&
+      Boolean(memory?.hasSeenChatOpening) &&
+      !memory?.trainedToday
 
-    if (
-      !shouldForceArrivalBriefing &&
-      !needsContextualArrival &&
-      !needsFirstArrival &&
-      hasDeliveredArrivalBriefing(userId) &&
-      !hasOpenedWeeklyThisWeek(userId)
-    ) {
-      void deliverWeeklyOpeningIfNeeded()
-    } else {
-      void checkProactiveMessage(shouldForceArrivalBriefing || needsFirstArrival || needsContextualArrival)
-    }
+    void checkProactiveMessage(
+      shouldForceArrivalBriefing ||
+      needsFirstArrival ||
+      needsContextualArrival ||
+      needsWeeklyArrivalProbe,
+    )
 
     const timer = window.setInterval(() => {
       void checkProactiveMessage()
@@ -1119,7 +1049,6 @@ export function ChatTab({
   }, [
     calibrationComplete,
     checkProactiveMessage,
-    deliverWeeklyOpeningIfNeeded,
     initialXpGranted,
     initialXpRewardSeen,
     memory,
@@ -1369,7 +1298,10 @@ export function ChatTab({
         }
       }
 
-      triggerProactivityExtraction(safeLanguage)
+      triggerProactivityExtraction(
+        safeLanguage,
+        options?.hideUserBubble ? [gutoMessage] : [userMessage, gutoMessage],
+      )
 
       // Fala em paralelo (fire-and-forget): NÃO travar o input enquanto o GUTO
       // fala. Antes o `await` mantinha isSending=true durante toda a fala, então
@@ -1795,22 +1727,17 @@ export function ChatTab({
             {actionableProactive.pendingConfirmation.map((memory) => (
               <div key={memory.id} className="flex w-full flex-col gap-1.5">
                 <span className="self-start rounded-full border border-[rgba(255,193,7,0.55)] bg-[rgba(255,243,205,0.9)] px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-[0.06em] text-(--guto-navy)">
-                  {proactiveUi.pendingConfirm(formatProactiveMemoryLabel(memory))}
+                  {memory.type === "trip"
+                    ? `${proactiveUi.pendingTrip} • ${formatProactiveMemoryLabel(memory)}`
+                    : proactiveUi.pendingConfirm(formatProactiveMemoryLabel(memory))}
                 </span>
-                <div className="flex gap-1.5">
+                <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
                     onClick={() => void resolveProactiveConfirmation(memory.id, "confirm")}
                     className="rounded-full bg-(--guto-cyan) px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-navy)"
                   >
                     {proactiveUi.btnYes}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void resolveProactiveConfirmation(memory.id, "discard")}
-                    className="rounded-full border border-[rgba(13,35,65,0.25)] bg-white px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-[rgba(13,35,65,0.7)]"
-                  >
-                    {proactiveUi.btnNo}
                   </button>
                   <button
                     type="button"
@@ -1821,6 +1748,13 @@ export function ChatTab({
                     className="rounded-full border border-[rgba(82,231,255,0.5)] bg-white px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-cyan)"
                   >
                     {proactiveUi.btnFix}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void resolveProactiveConfirmation(memory.id, "discard")}
+                    className="rounded-full border border-[rgba(13,35,65,0.25)] bg-white px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-[rgba(13,35,65,0.7)]"
+                  >
+                    {proactiveUi.btnNo}
                   </button>
                 </div>
               </div>

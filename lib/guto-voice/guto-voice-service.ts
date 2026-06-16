@@ -170,83 +170,6 @@ async function touchCachedAudio(record: GutoVoiceBankRecord) {
   })
 }
 
-/**
- * Picks the best available browser voice for the language.
- * Priority: male voices (by name heuristic) matching the language code first,
- * then any matching language voice, then system default.
- * This avoids the default female voice (e.g. Google Maps "Alice") on most devices.
- */
-function pickBrowserVoice(language: string): SpeechSynthesisVoice | null {
-  if (!isBrowser() || !window.speechSynthesis) return null
-  const voices = window.speechSynthesis.getVoices()
-  if (!voices.length) return null
-
-  const langCode = language.toLowerCase().replace("_", "-")
-  const baseLang = langCode.split("-")[0]
-
-  // Male-sounding name keywords (heuristic across pt-BR, en-US, it-IT)
-  const maleKeywords = /male|masculino|homem|uomo|reed|daniel|jorge|mark|google uk english male|alex|diego|luciano|andrés/i
-  // Female keywords to avoid when no male voice is found
-  const femaleKeywords = /female|feminino|mulher|donna|alice|samantha|victoria|karen|lisa|moira|tessa|fiona|yelena|paulina|lekha|amélie/i
-
-  const exactMatch = voices.filter((v) => v.lang.toLowerCase().replace("_", "-") === langCode)
-  const baseMatch = voices.filter((v) => v.lang.toLowerCase().startsWith(baseLang))
-
-  const preferMale = (list: SpeechSynthesisVoice[]) => {
-    const maleVoice = list.find((v) => maleKeywords.test(v.name))
-    if (maleVoice) return maleVoice
-    // No explicit male name found — prefer voices that don't match female keywords
-    const nonFemale = list.filter((v) => !femaleKeywords.test(v.name))
-    return nonFemale[0] ?? list[0] ?? null
-  }
-
-  return preferMale(exactMatch) ?? preferMale(baseMatch) ?? null
-}
-
-function speakWithBrowser(text: string, language: string) {
-  return new Promise<void>((resolve) => {
-    if (!isBrowser() || !window.speechSynthesis || !text.trim()) {
-      resolve()
-      return
-    }
-
-    let done = false
-    const MAX_TTS_MS = 8000
-    const safeResolve = () => { if (!done) { done = true; resolve() } }
-    const hardTimeout = setTimeout(safeResolve, MAX_TTS_MS)
-
-    const doSpeak = () => {
-      window.speechSynthesis.cancel()
-      const utterance = new SpeechSynthesisUtterance(text)
-      utterance.lang = language
-      utterance.rate = 1.04
-      utterance.pitch = 0.82
-      const selectedVoice = pickBrowserVoice(language)
-      if (selectedVoice) utterance.voice = selectedVoice
-      utterance.onend = () => { clearTimeout(hardTimeout); safeResolve() }
-      utterance.onerror = () => { clearTimeout(hardTimeout); safeResolve() }
-      window.speechSynthesis.speak(utterance)
-    }
-
-    // Voices may not be loaded yet on first call — wait for them
-    const voices = window.speechSynthesis.getVoices()
-    if (voices.length > 0) {
-      doSpeak()
-    } else {
-      let spoken = false
-      const speakOnce = () => {
-        if (spoken) return
-        spoken = true
-        window.speechSynthesis.onvoiceschanged = null
-        doSpeak()
-      }
-      window.speechSynthesis.onvoiceschanged = speakOnce
-      // Safety timeout: speak even if onvoiceschanged never fires
-      setTimeout(speakOnce, 500)
-    }
-  })
-}
-
 function isRemoteCacheable(text: string) {
   const normalized = normalizeTextForHash(text)
   if (!normalized || normalized.length > MAX_REMOTE_TEXT_LENGTH) return false
@@ -365,9 +288,11 @@ class GutoVoiceService {
       }
 
       if (isStale()) return supersededResult
-      await speakWithBrowser(text, language)
+      // Identidade vocal > disponibilidade a qualquer custo. O fallback nativo
+      // do navegador muda timbre/persona entre iOS/Android/desktop; quando a
+      // voz remota falha, este turno fica silencioso em vez de virar outra voz.
       return {
-        mode: "browser-fallback",
+        mode: "silent",
         cacheKey: await this.cacheKey({ text, language }),
         textHash: await sha1(normalizeTextForHash(text)),
         voiceId: getVoiceId(),
