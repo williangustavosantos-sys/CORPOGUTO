@@ -164,6 +164,19 @@ const jsonBody = (body: unknown) => ({
   body: JSON.stringify(body),
 })
 
+function toDateKey(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function addDays(date: Date, amount: number) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + amount)
+  return next
+}
+
 async function setupApiMocks(page: Page) {
   // Casa pelo final do pathname (cobre `/auth/me` e `/api/guto/auth/me`).
   const onPath = (suffix: string, handler: Parameters<Page['route']>[1]) =>
@@ -656,6 +669,224 @@ test.describe('GUTO – Fluxos críticos', () => {
     await expect(arenaContent).not.toBeEmpty()
 
     await snap(page, '20-arena-sem-crash')
+  })
+
+  test('21 — chat persiste histórico ao reabrir', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.goto('/')
+
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    const input = page.locator('input[type="text"]').first()
+    await expect(input).toBeVisible({ timeout: 8000 })
+    await input.fill('GUTO, vou viajar sexta')
+    await input.press('Enter')
+
+    await expect(page.getByTestId('user-message').filter({ hasText: 'vou viajar sexta' })).toBeVisible({ timeout: 8000 })
+    await expect(page.getByTestId('guto-message').filter({ hasText: 'Boa, QA!' })).toBeVisible({ timeout: 10000 })
+
+    await page.reload()
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByTestId('user-message').filter({ hasText: 'vou viajar sexta' })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByTestId('guto-message').filter({ hasText: 'Boa, QA!' })).toBeVisible({ timeout: 10000 })
+
+    await snap(page, '21-chat-history-persisted')
+  })
+
+  test('22 — teclado mobile mantém histórico e input utilizáveis', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.goto('/')
+
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    const input = page.locator('input[type="text"]').first()
+    await expect(input).toBeVisible({ timeout: 8000 })
+
+    await input.focus()
+    await page.evaluate(() => {
+      const vv = window.visualViewport
+      if (!vv) return
+      const input = document.activeElement instanceof HTMLInputElement
+        ? document.activeElement
+        : (document.querySelector('input[type="text"]') as HTMLInputElement | null)
+      input?.focus()
+      input?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      const heightDesc = Object.getOwnPropertyDescriptor(window.visualViewport, 'height')
+      const offsetDesc = Object.getOwnPropertyDescriptor(window.visualViewport, 'offsetTop')
+      Object.defineProperty(window.visualViewport, 'height', {
+        configurable: true,
+        get: () => Math.max(320, (window.innerHeight ?? 800) - 360),
+      })
+      Object.defineProperty(window.visualViewport, 'offsetTop', { configurable: true, get: () => 0 })
+      const viewportHeight = Math.max(320, (window.innerHeight ?? 800) - 360)
+      document.documentElement.setAttribute('data-keyboard-open', '')
+      document.documentElement.style.setProperty('--guto-viewport-height', `${viewportHeight}px`)
+      document.documentElement.style.setProperty('--guto-keyboard-offset', `${Math.max(0, window.innerHeight - viewportHeight)}px`)
+      document.querySelectorAll('.sala-guto').forEach((el) => {
+        const shell = el as HTMLElement
+        shell.setAttribute('data-keyboard-open', '')
+        shell.style.setProperty('--guto-viewport-height', `${viewportHeight}px`)
+        shell.style.setProperty('--guto-keyboard-offset', `${Math.max(0, window.innerHeight - viewportHeight)}px`)
+      })
+      window.dispatchEvent(new FocusEvent('focusin'))
+      window.dispatchEvent(new Event('resize'))
+      vv.dispatchEvent(new Event('resize'))
+      ;(window as unknown as { __restoreVisualViewport?: () => void }).__restoreVisualViewport = () => {
+        if (heightDesc) Object.defineProperty(window.visualViewport, 'height', heightDesc)
+        if (offsetDesc) Object.defineProperty(window.visualViewport, 'offsetTop', offsetDesc)
+      }
+    })
+    await page.waitForTimeout(180)
+
+    await expect(page.locator('html')).toHaveAttribute('data-keyboard-open', '', { timeout: 2000 })
+
+    const listBox = await page.locator('.guto-chat-list').boundingBox()
+    const inputBox = await input.boundingBox()
+    expect(listBox).not.toBeNull()
+    expect(inputBox).not.toBeNull()
+    expect(listBox!.height).toBeGreaterThan(120)
+    const visualHeight = await page.evaluate(() => window.visualViewport?.height ?? window.innerHeight)
+    expect(inputBox!.y + inputBox!.height).toBeLessThanOrEqual(visualHeight + 12)
+
+    await page.evaluate(() => {
+      ;(window as unknown as { __restoreVisualViewport?: () => void }).__restoreVisualViewport?.()
+      document.documentElement.removeAttribute('data-keyboard-open')
+      document.querySelectorAll('.sala-guto').forEach((el) => {
+        const shell = el as HTMLElement
+        shell.removeAttribute('data-keyboard-open')
+        shell.style.removeProperty('--guto-viewport-height')
+        shell.style.removeProperty('--guto-keyboard-offset')
+      })
+      window.dispatchEvent(new Event('resize'))
+      window.visualViewport?.dispatchEvent(new Event('resize'))
+    })
+    await input.blur()
+
+    await snap(page, '22-chat-keyboard-mobile')
+  })
+
+  test('23 — Percurso mostra viagem registrada e treino adaptado no calendário', async ({ page }) => {
+    const travelDate = addDays(new Date(), 4)
+    const travelDateKey = toDateKey(travelDate)
+    const travelDay = String(travelDate.getDate()).padStart(2, '0')
+
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody({
+        ...mockMemory,
+        proactiveMemories: [
+          {
+            id: 'pm-trip-e2e',
+            userId: TEST_USER_ID,
+            type: 'trip',
+            status: 'confirmed',
+            rawText: 'vou viajar sexta',
+            understood: 'Viagem registrada',
+            dateText: 'sexta',
+            dateParsed: travelDateKey,
+            weekKey: 'e2e-week',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+        proactiveImpacts: [
+          {
+            id: 'pi-trip-e2e',
+            memoryId: 'pm-trip-e2e',
+            status: 'active',
+            surfaces: ['chat', 'workout', 'mission', 'path'],
+            priority: 80,
+            affectedDates: [travelDateKey],
+            workoutEffect: 'short_light',
+            missionEffect: 'reduced',
+            pushEffect: 'avoid_blind_charge',
+            xpEffect: 'no_free_xp_context_only',
+            arenaEffect: 'validation_required',
+            pathEffect: 'adapted_context',
+            evolutionEffect: 'adapted_context',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            decision: {
+              id: 'decision-trip-e2e',
+              memoryId: 'pm-trip-e2e',
+              kind: 'adapt_day',
+              reason: 'travel',
+              priority: 80,
+              affectedDates: [travelDateKey],
+              workoutEffect: 'short_light',
+              missionEffect: 'reduced',
+              message: 'Treino adaptado por causa da viagem.',
+              createdAt: new Date().toISOString(),
+            },
+          },
+        ],
+      }))
+    )
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'PERCURSO' }).click()
+    await expect(page.getByText('Memória visual')).toBeVisible({ timeout: 8000 })
+
+    await page.getByRole('button', { name: new RegExp(`${travelDay} Treino adaptado`) }).click()
+    await expect(page.getByText('Viagem registrada').first()).toBeVisible({ timeout: 8000 })
+    await expect(page.getByText('Treino adaptado').first()).toBeVisible()
+
+    await snap(page, '23-path-travel-adapted')
+  })
+
+  test('24 — resposta rápida de viagem envia contexto operacional correto', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const seenInputs: string[] = []
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto'), async (route) => {
+      if (route.request().method() !== 'POST') return route.continue()
+      const body = route.request().postDataJSON() as { input?: string }
+      seenInputs.push(body.input || '')
+      if (seenInputs.length === 1) {
+        return route.fulfill(jsonBody({
+          fala: 'Consigo adaptar para 20-30 minutos. Você consegue treinar?',
+          acao: 'none',
+          avatarEmotion: 'alert',
+          expectedResponse: {
+            type: 'text',
+            context: 'travel_training',
+            options: ['SIM', 'NÃO'],
+            instruction: 'Responder se consegue treinar na viagem ou se o dia precisa ser protegido.',
+          },
+        }))
+      }
+      return route.fulfill(jsonBody({
+        fala: 'Viagem registrada. Treino adaptado.',
+        acao: 'none',
+        avatarEmotion: 'default',
+        expectedResponse: null,
+        memoryPatch: {
+          proactiveMemories: [],
+          proactiveImpacts: [],
+        },
+      }))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    const input = page.locator('input[type="text"]').first()
+    await expect(input).toBeVisible({ timeout: 8000 })
+    await input.fill('viajo sexta')
+    await input.press('Enter')
+
+    await expect(page.getByRole('button', { name: 'SIM' })).toBeVisible({ timeout: 10000 })
+    await page.getByRole('button', { name: 'SIM' }).click()
+    await expect(page.getByText('Viagem registrada. Treino adaptado.')).toBeVisible({ timeout: 10000 })
+
+    await expect.poll(() => seenInputs.length).toBeGreaterThanOrEqual(2)
+    expect(seenInputs[1]).toContain('consigo treinar na viagem')
+
+    await snap(page, '24-travel-quick-reply')
   })
 
 })
