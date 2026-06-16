@@ -2,6 +2,7 @@ import type { ProactiveMemory, SupportedLanguage } from "@/lib/api/guto"
 
 export type ProactiveMemoryUiCopy = {
   pendingConfirm: (label: string) => string
+  pendingTrip: string
   pendingValidate: (label: string) => string
   hintConfirm: string
   hintValidate: string
@@ -13,30 +14,33 @@ export type ProactiveMemoryUiCopy = {
 const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
   "pt-BR": {
     pendingConfirm: (label) => `Confirmar: ${label}`,
+    pendingTrip: "VIAGEM DETECTADA",
     pendingValidate: (label) => `Validar: ${label}`,
-    hintConfirm: "Confirma aqui ou corrige no chat antes do GUTO seguir.",
+    hintConfirm: "Confirma aqui, altera a data no chat ou fecha se não for isso.",
     hintValidate: "O GUTO quer saber o que aconteceu com este compromisso da semana passada.",
-    btnYes: "Sim",
-    btnNo: "Não",
-    btnFix: "Corrigir",
+    btnYes: "Confirmar",
+    btnNo: "Fechar",
+    btnFix: "Alterar data",
   },
   "en-US": {
     pendingConfirm: (label) => `Confirm: ${label}`,
+    pendingTrip: "TRAVEL DETECTED",
     pendingValidate: (label) => `Validate: ${label}`,
-    hintConfirm: "Confirm here or correct in chat before GUTO moves on.",
+    hintConfirm: "Confirm here, change the date in chat, or close it if this is wrong.",
     hintValidate: "GUTO needs to know what happened with this commitment from last week.",
-    btnYes: "Yes",
-    btnNo: "No",
-    btnFix: "Fix",
+    btnYes: "Confirm",
+    btnNo: "Close",
+    btnFix: "Change date",
   },
   "it-IT": {
     pendingConfirm: (label) => `Conferma: ${label}`,
+    pendingTrip: "VIAGGIO RILEVATO",
     pendingValidate: (label) => `Valida: ${label}`,
-    hintConfirm: "Conferma qui o correggi in chat prima che GUTO vada avanti.",
+    hintConfirm: "Conferma qui, cambia la data in chat o chiudi se non è corretto.",
     hintValidate: "GUTO vuole sapere cosa è successo con questo impegno della settimana scorsa.",
-    btnYes: "Sì",
-    btnNo: "No",
-    btnFix: "Correggi",
+    btnYes: "Conferma",
+    btnNo: "Chiudi",
+    btnFix: "Cambia data",
   },
 }
 
