@@ -138,6 +138,26 @@ function parseDateKey(value?: string | null): Date | null {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
+// Fuso oficial do GUTO — DEVE espelhar config.timeZone do backend (CEREBROGUTO:
+// GUTO_TIME_ZONE || TZ || "Europe/Rome"). O Percurso precisa cravar cada INSTANTE
+// (createdAt da validação, "hoje", trainedToday) no MESMO dia que o backend usa em
+// completedWorkoutDates/xpEvents. Fatiar o ISO em UTC (slice) cravava o treino no dia
+// errado e duplicava entre validationHistory e completedWorkoutDates.
+const GUTO_TIME_ZONE = process.env.NEXT_PUBLIC_GUTO_TIME_ZONE || "Europe/Rome"
+
+// Converte um instante (Date/ISO/epoch) na data-chave YYYY-MM-DD do fuso oficial.
+// Equivale ao todayKey() do backend (Intl en-CA + timeZone).
+function instantToDateKey(value: Date | string | number): string | null {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: GUTO_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date)
+}
+
 function addDays(date: Date, amount: number) {
   const next = new Date(date)
   next.setDate(next.getDate() + amount)
@@ -255,8 +275,9 @@ export function buildGutoPathMonth({
   validationHistory?: WorkoutValidationRecord[]
   today?: Date
 }): GutoPathMonth {
-  const todayKey = toDateKey(today)
-  const monthStart = startOfMonth(today)
+  const todayKey = instantToDateKey(today) ?? toDateKey(today)
+  const [todayYear, todayMonth, todayDay] = todayKey.split("-").map(Number)
+  const monthStart = startOfMonth(new Date(todayYear, todayMonth - 1, todayDay, 12))
   const gridStart = startOfCalendarGrid(monthStart)
   const days = Array.from({ length: 42 }, (_, index) =>
     createDay(addDays(gridStart, index), monthStart.getMonth(), language, todayKey)
@@ -280,8 +301,8 @@ export function buildGutoPathMonth({
 
   for (const record of validationHistory) {
     if (record.status !== "validated") continue
-    const date = parseDateKey(record.createdAt)
-    if (date) addWorkoutEvent(toDateKey(date), record.id)
+    const dateKey = instantToDateKey(record.createdAt)
+    if (dateKey) addWorkoutEvent(dateKey, record.id)
   }
 
   if (memory?.trainedToday) addWorkoutEvent(todayKey, "trained-today")
@@ -344,7 +365,7 @@ export function buildGutoPathMonth({
   }
 
   return {
-    monthLabel: new Intl.DateTimeFormat(language, { month: "long", year: "numeric" }).format(today),
+    monthLabel: new Intl.DateTimeFormat(language, { month: "long", year: "numeric" }).format(monthStart),
     weekdays: Array.from({ length: 7 }, (_, index) =>
       new Intl.DateTimeFormat(language, { weekday: "short" }).format(addDays(gridStart, index)).toUpperCase()
     ),

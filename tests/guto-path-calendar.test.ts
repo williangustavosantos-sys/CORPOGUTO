@@ -198,3 +198,86 @@ describe("buildGutoPathMonth — calendário vivo do Percurso", () => {
     assert.ok(labels.includes("+100 XP"))
   })
 })
+
+function workoutsOnDay(month: GutoPathMonth, dateKey: string) {
+  const day = month.days.find((item) => item.dateKey === dateKey)
+  if (!day) return 0
+  return day.events.filter((event) => event.kind === "workout_completed").length
+}
+
+describe("buildGutoPathMonth — timezone do treino validado (alinhado ao backend)", () => {
+  // O backend (CEREBROGUTO) crava todas as datas em GUTO_TIME_ZONE = Europe/Rome
+  // (config.timeZone / render.yaml). O Percurso tem que cravar createdAt no MESMO fuso,
+  // senão o treino cai no dia errado e/ou duplica entre validationHistory e
+  // completedWorkoutDates. Estes testes rodam com o default Europe/Rome.
+
+  it("treino às 22h30 em America/Sao_Paulo aparece SOMENTE no dia oficial, sem duplicar", () => {
+    // 22h30 de 16/06 em São Paulo (UTC-3) = 2026-06-17T01:30Z. Em Europe/Rome (CEST, UTC+2)
+    // isso é 17/06 03h30 — o mesmo dia que o backend grava em completedWorkoutDates.
+    const createdAt = "2026-06-17T01:30:00.000Z"
+    const validation: WorkoutValidationRecord = {
+      id: "validation-sp-2230",
+      userId: "user-1",
+      createdAt,
+      dateLabel: "16 Jun",
+      workoutFocus: "Peito",
+      workoutLabel: "Peito e tríceps",
+      locationMode: "gym",
+      language: "pt-BR",
+      photoUrl: "/photo.jpg",
+      posterUrl: "/poster.jpg",
+      thumbUrl: "/thumb.jpg",
+      xp: 100,
+      status: "validated",
+      gutoMessage: "Treino validado.",
+    }
+    const month = buildGutoPathMonth({
+      language: "pt-BR",
+      today: new Date("2026-06-16T12:00:00.000Z"),
+      validationHistory: [validation],
+      // backend já registrou o mesmo treino no dia oficial (Rome): 17/06.
+      memory: baseMemory({ completedWorkoutDates: ["2026-06-17"] }),
+    })
+
+    // Aparece UMA vez, no dia oficial (17/06) — as duas fontes (validationHistory +
+    // completedWorkoutDates) caem no mesmo dia e o dedup colapsa em um único evento.
+    assert.equal(workoutsOnDay(month, "2026-06-17"), 1)
+    assert.equal(findDay(month, "2026-06-17").status, "completed")
+    // E NÃO vaza para 16/06 nem duplica.
+    assert.equal(workoutsOnDay(month, "2026-06-16"), 0)
+  })
+
+  it("treino cujo instante UTC cai no dia anterior ao oficial NÃO duplica (regressão do slice)", () => {
+    // 23h30Z de 16/06 = 01h30 de 17/06 em Europe/Rome. O slice cru do ISO ('2026-06-16')
+    // cairia em 16/06 enquanto completedWorkoutDates (Rome) está em 17/06 → ANTES: dois
+    // marcadores em dias diferentes. DEPOIS: ambos em 17/06, deduplicados.
+    const createdAt = "2026-06-16T23:30:00.000Z"
+    const validation: WorkoutValidationRecord = {
+      id: "validation-late-utc",
+      userId: "user-1",
+      createdAt,
+      dateLabel: "16 Jun",
+      workoutFocus: "Costas",
+      workoutLabel: "Costas e bíceps",
+      locationMode: "gym",
+      language: "pt-BR",
+      photoUrl: "/photo.jpg",
+      posterUrl: "/poster.jpg",
+      thumbUrl: "/thumb.jpg",
+      xp: 100,
+      status: "validated",
+      gutoMessage: "Treino validado.",
+    }
+    const month = buildGutoPathMonth({
+      language: "pt-BR",
+      today: new Date("2026-06-16T12:00:00.000Z"),
+      validationHistory: [validation],
+      memory: baseMemory({ completedWorkoutDates: ["2026-06-17"] }),
+    })
+
+    // Dia oficial (Rome): exatamente um "Treino concluído".
+    assert.equal(workoutsOnDay(month, "2026-06-17"), 1)
+    // Dia anterior (o que o slice cru marcaria): nenhum evento de treino.
+    assert.equal(workoutsOnDay(month, "2026-06-16"), 0)
+  })
+})
