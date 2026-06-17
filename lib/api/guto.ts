@@ -124,7 +124,29 @@ export interface GutoExpectedResponse {
     | "training_status"
     | "training_limitations"
     | "limitation_check"
+    | "exercise_swap"
     | "travel_training"
+}
+
+export type ProactivePromptKind =
+  | "weekly_opening"
+  | "travel_training"
+  | "memory_reminder"
+  | "memory_validation"
+
+export interface ProactivePrompt {
+  id: string
+  kind: ProactivePromptKind
+  status: "active" | "resolved"
+  fala: string
+  expectedResponse?: GutoExpectedResponse | null
+  relatedMemoryId?: string
+  weekKey?: string
+  dayKey?: string
+  createdAt: string
+  updatedAt: string
+  surfacedAt?: string
+  answeredAt?: string
 }
 
 export interface SendGutoMessageRequest {
@@ -206,6 +228,7 @@ export interface GutoMemory {
   lastWorkoutPlan?: GutoWorkoutPlan | null
   proactiveMemories?: ProactiveMemory[]
   proactiveImpacts?: ProactiveImpact[]
+  proactivePrompt?: ProactivePrompt | null
   dietGenerationStatus?: "idle" | "ready_to_generate" | "generating" | "generated" | "needs_clarification" | "failed"
   weeklyWorkoutPlan?: {
     studentId: string

@@ -470,7 +470,6 @@ function readStoredChatState(userId: string): StoredChatState | null {
       : []
 
     if (!messages.length) return null
-    if (!messages.some((message) => !message.isGuto)) return null
     return {
       messages: removeConsecutiveDuplicateGutoMessages(
         messages.filter((message) => !isStaleAudioFailureMessage(message))
