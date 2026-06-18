@@ -738,6 +738,7 @@ export function ChatTab({
 
       const messageId = `g-proactivity-action-${Date.now()}`
       const timestamp = new Date()
+      syncExpectedResponse(result?.expectedResponse || null, result?.expectedResponse ? messageId : null)
       setMessages((prev) =>
         appendProactivityActionFalaMessage(prev, result, (fala) => ({
           id: messageId,
@@ -748,7 +749,7 @@ export function ChatTab({
         })),
       )
     },
-    [onMemoryPatch]
+    [onMemoryPatch, syncExpectedResponse]
   )
 
   // Botões Sim/Não do card de proatividade: resolve de forma determinística
@@ -1489,11 +1490,22 @@ export function ChatTab({
   const quickReplyOptions = activeExpectedResponse?.options?.filter((option) => option.trim()) ?? []
   const proactiveUi = useMemo(() => getProactiveMemoryUiCopy(validLang), [validLang])
   const actionableProactive = useMemo(
-    () => getActionableProactiveMemories(proactiveMemories),
-    [proactiveMemories]
+    () => getActionableProactiveMemories(proactiveMemories, memory?.activeConversationContext || null),
+    [memory?.activeConversationContext, proactiveMemories]
   )
   const showProactiveBanner =
-    !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories)
+    !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories, memory?.activeConversationContext || null)
+  const primaryProactiveMemory = actionableProactive.primary
+  const proactiveBannerHint =
+    primaryProactiveMemory?.type === "trip" && primaryProactiveMemory.confirmationStage === "impact"
+      ? proactiveUi.hintTripImpact
+      : primaryProactiveMemory?.type === "trip"
+        ? proactiveUi.hintTripEvent
+        : actionableProactive.awaitingDiscard.length > 0
+          ? proactiveUi.hintConfirm
+          : actionableProactive.pendingValidation.length > 0
+            ? proactiveUi.hintValidate
+            : proactiveUi.hintConfirm
   const inputPlaceholder =
     contextChip?.type === "exercise"
       ? copy.exerciseInputPlaceholder
@@ -1719,18 +1731,14 @@ export function ChatTab({
           className="max-h-[42vh] w-full overflow-y-auto rounded-[16px] border border-[rgba(82,231,255,0.4)] bg-white/95 px-3 py-2 shadow-[0_8px_24px_rgba(82,231,255,0.18)]"
         >
           <p className="mb-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[rgba(13,35,65,0.55)]">
-            {actionableProactive.pendingConfirmation.length > 0
-              ? proactiveUi.hintConfirm
-              : actionableProactive.awaitingDiscard.length > 0
-                ? proactiveUi.hintConfirm
-                : proactiveUi.hintValidate}
+            {proactiveBannerHint}
           </p>
           <div className="flex flex-wrap gap-1.5">
             {actionableProactive.pendingConfirmation.map((memory) => (
               <div key={memory.id} className="flex w-full flex-col gap-1.5">
                 <span className="self-start rounded-full border border-[rgba(255,193,7,0.55)] bg-[rgba(255,243,205,0.9)] px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-[0.06em] text-(--guto-navy)">
                   {memory.type === "trip"
-                    ? `${proactiveUi.pendingTrip} • ${formatProactiveMemoryLabel(memory)}`
+                    ? `${memory.confirmationStage === "impact" ? proactiveUi.pendingTripImpact : proactiveUi.pendingTrip} • ${formatProactiveMemoryLabel(memory)}`
                     : proactiveUi.pendingConfirm(formatProactiveMemoryLabel(memory))}
                 </span>
                 <div className="flex flex-wrap gap-1.5">

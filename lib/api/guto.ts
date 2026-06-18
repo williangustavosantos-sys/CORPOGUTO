@@ -149,6 +149,30 @@ export interface ProactivePrompt {
   answeredAt?: string
 }
 
+export type ActiveConversationContextKind =
+  | "travel_confirmation"
+  | "travel_impact_confirmation"
+  | "workout_substitution"
+  | "diet_substitution"
+  | "pain_safety"
+  | "weekly_checkin"
+  | "none"
+
+export interface ActiveConversationContext {
+  kind: ActiveConversationContextKind
+  source:
+    | "proactive_memory"
+    | "proactive_prompt"
+    | "substitution_context"
+    | "safety"
+    | "weekly_conversation"
+    | "none"
+  relatedMemoryId?: string
+  originalId?: string
+  dateParsed?: string
+  updatedAt: string
+}
+
 export interface SendGutoMessageRequest {
   profile: {
     name: string
@@ -229,6 +253,7 @@ export interface GutoMemory {
   proactiveMemories?: ProactiveMemory[]
   proactiveImpacts?: ProactiveImpact[]
   proactivePrompt?: ProactivePrompt | null
+  activeConversationContext?: ActiveConversationContext | null
   dietGenerationStatus?: "idle" | "ready_to_generate" | "generating" | "generated" | "needs_clarification" | "failed"
   weeklyWorkoutPlan?: {
     studentId: string
@@ -645,6 +670,7 @@ export interface GutoProactivityActionResult {
   memory?: ProactiveMemory
   impact?: ProactiveImpact | null
   fala?: string
+  expectedResponse?: GutoExpectedResponse | null
   memoryPatch?: Partial<GutoMemory>
   ignored?: boolean
 }
@@ -666,6 +692,7 @@ export interface ProactiveMemory {
   userId: string
   type: "trip" | "commitment" | "schedule" | "health" | "other"
   status: ProactiveMemoryStatus
+  confirmationStage?: "event" | "impact"
   rawText: string
   understood: string
   dateText?: string

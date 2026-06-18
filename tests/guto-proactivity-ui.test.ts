@@ -5,6 +5,7 @@ import {
   formatProactiveMemoryLabel,
   getActionableProactiveMemories,
   getProactiveMemoryUiCopy,
+  hasActionableProactiveMemories,
 } from "../lib/guto-proactivity-ui"
 import type { ProactiveMemory } from "../lib/api/guto"
 
@@ -37,9 +38,45 @@ describe("guto proactivity UI", () => {
     const copy = getProactiveMemoryUiCopy("pt-BR")
 
     assert.equal(copy.pendingTrip, "VIAGEM DETECTADA")
+    assert.equal(copy.pendingTripImpact, "IMPACTO NO TREINO")
     assert.equal(copy.btnYes, "Confirmar")
     assert.equal(copy.btnFix, "Alterar data")
     assert.equal(copy.btnNo, "Fechar")
     assert.equal(formatProactiveMemoryLabel(tripMemory()), "Viagem provável em 2026-06-19 (19/06)")
+  })
+
+  it("deduplica cards iguais e mostra só um contexto principal", () => {
+    const memories = [
+      tripMemory({ id: "pm-trip-1" }),
+      tripMemory({ id: "pm-trip-2" }),
+    ]
+    const actionable = getActionableProactiveMemories(memories)
+
+    assert.equal(actionable.pendingConfirmation.length, 1)
+    assert.equal(actionable.pendingConfirmation[0]?.id, "pm-trip-1")
+    assert.equal(hasActionableProactiveMemories(memories), true)
+  })
+
+  it("respeita activeConversationContext ao escolher o card visivel", () => {
+    const memories = [
+      tripMemory({ id: "pm-trip-event", confirmationStage: "event", dateParsed: "2026-06-19" }),
+      tripMemory({
+        id: "pm-trip-impact",
+        confirmationStage: "impact",
+        dateParsed: "2026-06-20",
+        understood: "Viagem confirmada sem treino",
+      }),
+    ]
+    const actionable = getActionableProactiveMemories(memories, {
+      kind: "travel_impact_confirmation",
+      source: "proactive_memory",
+      relatedMemoryId: "pm-trip-impact",
+      dateParsed: "2026-06-20",
+      updatedAt: "2026-06-18T12:00:00.000Z",
+    })
+
+    assert.equal(actionable.pendingConfirmation.length, 1)
+    assert.equal(actionable.pendingConfirmation[0]?.id, "pm-trip-impact")
+    assert.equal(actionable.pendingConfirmation[0]?.confirmationStage, "impact")
   })
 })
