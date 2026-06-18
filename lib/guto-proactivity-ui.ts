@@ -49,8 +49,16 @@ export function getProactiveMemoryUiCopy(language: string): ProactiveMemoryUiCop
   return copyByLang["pt-BR"]
 }
 
+function formatDateParsedLabel(dateParsed?: string): string | null {
+  const match = dateParsed?.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!match) return null
+  return `${match[3]}/${match[2]}`
+}
+
 export function formatProactiveMemoryLabel(memory: ProactiveMemory): string {
   const base = memory.understood?.trim() || memory.rawText?.trim() || memory.type
+  const absoluteDate = formatDateParsedLabel(memory.dateParsed)
+  if (absoluteDate) return `${base} (${absoluteDate})`
   if (memory.dateText?.trim()) return `${base} (${memory.dateText.trim()})`
   return base
 }

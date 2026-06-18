@@ -5,6 +5,7 @@ import {
   getProactivityActionMemoryPatch,
   type ProactivityActionMessage,
 } from "../lib/guto-proactivity-action-result"
+import { formatProactiveMemoryLabel } from "../lib/guto-proactivity-ui"
 
 type TestMessage = ProactivityActionMessage & { id: string }
 
@@ -49,5 +50,23 @@ describe("proactivity action result UI", () => {
 
     assert.equal(next, previous)
     assert.equal(next.length, 1)
+  })
+
+  it("mostra data absoluta resolvida no card de viagem", () => {
+    const label = formatProactiveMemoryLabel({
+      id: "travel-1",
+      userId: "qa",
+      weekKey: "2026-W25",
+      type: "trip",
+      rawText: "eu viajo amanhã",
+      understood: "Viagem amanhã",
+      dateText: "amanhã",
+      dateParsed: "2026-06-19",
+      status: "pending_confirmation",
+      createdAt: "2026-06-18T09:00:00.000Z",
+      updatedAt: "2026-06-18T09:00:00.000Z",
+    })
+
+    assert.equal(label, "Viagem amanhã (19/06)")
   })
 })

@@ -422,6 +422,19 @@ test.describe('GUTO – Fluxos críticos', () => {
     expect(bodyText).not.toMatch(/Como posso te ajudar hoje/i)
   })
 
+  test('10c — card interno do chat mostra apenas GUTO, sem duplicar a dupla', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.goto('/')
+
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    const presenceLabel = page.getByTestId('guto-chat-presence-label')
+    await expect(presenceLabel).toBeVisible({ timeout: 8000 })
+    await expect(presenceLabel).toHaveText('GUTO')
+    await expect(presenceLabel).not.toContainText(/GUTO\s*&/i)
+  })
+
   // ── 11. Enviar mensagem no chat ────────────────────────────────────────────
   test('11 — envia mensagem no chat e recebe resposta (mocked)', async ({ page }) => {
     await injectAuthStorage(page)

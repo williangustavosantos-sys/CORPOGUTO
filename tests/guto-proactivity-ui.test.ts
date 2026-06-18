@@ -40,6 +40,6 @@ describe("guto proactivity UI", () => {
     assert.equal(copy.btnYes, "Confirmar")
     assert.equal(copy.btnFix, "Alterar data")
     assert.equal(copy.btnNo, "Fechar")
-    assert.match(formatProactiveMemoryLabel(tripMemory()), /sexta/)
+    assert.equal(formatProactiveMemoryLabel(tripMemory()), "Viagem provável em 2026-06-19 (19/06)")
   })
 })

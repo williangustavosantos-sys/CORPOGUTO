@@ -1186,7 +1186,7 @@ body.guto-online-active .guto-settings-trigger-shell {
 }
 
 .guto-chat-sound-toggle {
-  right: clamp(22px, 8%, 44px);
+  right: calc(clamp(22px, 8%, 44px) + 52px);
   top: calc(var(--guto-chat-header-top) + 10px);
 }
 

@@ -1650,8 +1650,11 @@ export function ChatTab({
               <p className="font-mono text-[9px] font-black uppercase tracking-[0.2em] text-(--guto-cyan)">
                 {copy.conversationActive}
               </p>
-              <p className="mt-1 truncate text-[12px] font-black leading-tight text-(--guto-navy)">
-                {brandName ? `GUTO & ${brandName}` : "GUTO"}
+              <p
+                className="mt-1 truncate text-[12px] font-black leading-tight text-(--guto-navy)"
+                data-testid="guto-chat-presence-label"
+              >
+                GUTO
               </p>
               <p className="mt-0.5 truncate font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-[rgba(13,35,65,0.44)]">
                 {copy.visualMemoryHint}
