@@ -89,7 +89,7 @@ function findDay(month: GutoPathMonth, dateKey: string) {
 }
 
 describe("buildGutoPathMonth — calendário vivo do Percurso", () => {
-  it("registra viagem e adaptação no calendário mensal", () => {
+  it("agrega viagem e adaptação em um único item do calendário", () => {
     const month = buildGutoPathMonth({
       language: "pt-BR",
       today: new Date(2026, 5, 16, 12),
@@ -103,8 +103,7 @@ describe("buildGutoPathMonth — calendário vivo do Percurso", () => {
     const labels = day.events.map((event) => event.label)
 
     assert.equal(day.status, "adapted")
-    assert.ok(labels.includes("Viagem registrada"))
-    assert.ok(labels.includes("Treino adaptado"))
+    assert.deepEqual(labels, ["Treino adaptado"])
   })
 
   it("registra dia protegido quando a viagem impossibilita treino", () => {
@@ -126,8 +125,7 @@ describe("buildGutoPathMonth — calendário vivo do Percurso", () => {
     const labels = day.events.map((event) => event.label)
 
     assert.equal(day.status, "protected")
-    assert.ok(labels.includes("Viagem registrada"))
-    assert.ok(labels.includes("Dia protegido"))
+    assert.deepEqual(labels, ["Dia protegido"])
   })
 
   it("mantem viagem pendente visível sem cravar adaptação definitiva", () => {
@@ -151,8 +149,7 @@ describe("buildGutoPathMonth — calendário vivo do Percurso", () => {
     const labels = day.events.map((event) => event.label)
 
     assert.equal(day.status, "pending")
-    assert.ok(labels.includes("Viagem em confirmação"))
-    assert.ok(labels.includes("Definir treino da viagem"))
+    assert.deepEqual(labels, ["Definir treino da viagem"])
   })
 
   it("registra treino validado e XP real do ledger", () => {

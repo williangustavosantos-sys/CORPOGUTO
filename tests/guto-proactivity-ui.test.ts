@@ -15,6 +15,7 @@ function tripMemory(patch: Partial<ProactiveMemory> = {}): ProactiveMemory {
     userId: "user-1",
     type: "trip",
     status: "pending_confirmation",
+    stage: "impact_confirmation",
     rawText: "viajo sexta",
     understood: "Viagem provável em 2026-06-19",
     dateText: "sexta",
@@ -59,7 +60,12 @@ describe("guto proactivity UI", () => {
 
   it("respeita activeConversationContext ao escolher o card visivel", () => {
     const memories = [
-      tripMemory({ id: "pm-trip-event", confirmationStage: "event", dateParsed: "2026-06-19" }),
+      tripMemory({
+        id: "pm-trip-event",
+        stage: "continuity_question",
+        confirmationStage: "event",
+        dateParsed: "2026-06-19",
+      }),
       tripMemory({
         id: "pm-trip-impact",
         confirmationStage: "impact",

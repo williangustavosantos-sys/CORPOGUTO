@@ -108,7 +108,11 @@ export function getActionableProactiveMemories(
   activeContext?: ActiveConversationContext | null
 ) {
   const pendingConfirmation = dedupeProactiveMemories(
-    memories.filter((item) => item.status === "pending_confirmation")
+    memories.filter((item) => {
+      if (item.status !== "pending_confirmation") return false
+      if (item.type !== "trip") return true
+      return item.stage === "impact_confirmation" || (!item.stage && item.confirmationStage === "impact")
+    })
   )
   const pendingValidation = dedupeProactiveMemories(
     memories.filter((item) => item.status === "pending_validation")

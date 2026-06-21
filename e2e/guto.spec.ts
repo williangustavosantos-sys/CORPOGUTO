@@ -779,7 +779,7 @@ test.describe('GUTO – Fluxos críticos', () => {
     await snap(page, '22-chat-keyboard-mobile')
   })
 
-  test('23 — Percurso mostra viagem registrada e treino adaptado no calendário', async ({ page }) => {
+  test('23 — Percurso agrega viagem e treino adaptado em um item do calendário', async ({ page }) => {
     const travelDate = addDays(new Date(), 4)
     const travelDateKey = toDateKey(travelDate)
     const travelDay = String(travelDate.getDate()).padStart(2, '0')
@@ -844,8 +844,8 @@ test.describe('GUTO – Fluxos críticos', () => {
     await expect(page.getByText('Memória visual')).toBeVisible({ timeout: 8000 })
 
     await page.getByRole('button', { name: new RegExp(`${travelDay} Treino adaptado`) }).click()
-    await expect(page.getByText('Viagem registrada').first()).toBeVisible({ timeout: 8000 })
-    await expect(page.getByText('Treino adaptado').first()).toBeVisible()
+    await expect(page.getByText('Treino adaptado').first()).toBeVisible({ timeout: 8000 })
+    await expect(page.getByText('Viagem registrada')).toHaveCount(0)
 
     await snap(page, '23-path-travel-adapted')
   })

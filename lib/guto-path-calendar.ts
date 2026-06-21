@@ -334,20 +334,38 @@ export function buildGutoPathMonth({
     })
   }
 
-  for (const memoryItem of memory?.proactiveMemories || []) {
-    if (!VISIBLE_MEMORY_STATUSES.has(memoryItem.status)) continue
-    const date = parseDateKey(memoryItem.dateParsed)
-    if (!date) continue
-    pushEvent(byKey.get(toDateKey(date)), memoryEvent(memoryItem, language))
+  const visibleImpacts = (memory?.proactiveImpacts || []).filter((impact) => VISIBLE_IMPACT_STATUSES.has(impact.status))
+  const impactByMemoryId = new Map<string, ProactiveImpact>()
+  for (const impact of visibleImpacts) {
+    const current = impactByMemoryId.get(impact.memoryId)
+    if (!current || impact.priority > current.priority || impact.updatedAt > current.updatedAt) {
+      impactByMemoryId.set(impact.memoryId, impact)
+    }
   }
 
-  for (const impact of memory?.proactiveImpacts || []) {
-    if (!VISIBLE_IMPACT_STATUSES.has(impact.status)) continue
+  const renderedImpactIds = new Set<string>()
+  for (const memoryItem of memory?.proactiveMemories || []) {
+    if (!VISIBLE_MEMORY_STATUSES.has(memoryItem.status)) continue
+    const impact = impactByMemoryId.get(memoryItem.id)
+    const aggregatedImpactEvent = impact ? impactEvent(impact, language) : null
+    if (impact && aggregatedImpactEvent) {
+      renderedImpactIds.add(impact.id)
+      const affectedDates = impact.affectedDates.length > 0
+        ? impact.affectedDates
+        : memoryItem.dateParsed ? [memoryItem.dateParsed] : []
+      for (const dateKey of affectedDates) pushEvent(byKey.get(dateKey), aggregatedImpactEvent)
+      continue
+    }
+
+    const date = parseDateKey(memoryItem.dateParsed)
+    if (date) pushEvent(byKey.get(toDateKey(date)), memoryEvent(memoryItem, language))
+  }
+
+  for (const impact of visibleImpacts) {
+    if (renderedImpactIds.has(impact.id)) continue
     const event = impactEvent(impact, language)
     if (!event) continue
-    for (const dateKey of impact.affectedDates || []) {
-      pushEvent(byKey.get(dateKey), event)
-    }
+    for (const dateKey of impact.affectedDates || []) pushEvent(byKey.get(dateKey), event)
   }
 
   for (const day of days) {
