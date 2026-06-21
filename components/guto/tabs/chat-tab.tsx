@@ -559,6 +559,11 @@ function buildDietModelContext(
   ].join(" ")
 }
 
+function createGutoTurnId(userId: string): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID()
+  return `${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export function ChatTab({
   userId,
   userName,
@@ -983,6 +988,16 @@ export function ChatTab({
       if (data.acao === "updateWorkout" && data.workoutPlan) {
         onWorkoutPlanUpdated?.(data.workoutPlan)
       }
+      if (data.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
+        onMemoryPatch?.(data.memoryPatch)
+      }
+      if (data.workoutPlan && !dietGenerationAfterWorkoutRef.current) {
+        dietGenerationAfterWorkoutRef.current = true
+        void generateDietPlan(safeLanguage).catch((error) => {
+          dietGenerationAfterWorkoutRef.current = false
+          console.warn(`Dieta base do GUTO não foi gerada na chegada: ${getApiErrorMessage(error)}`)
+        })
+      }
 
       if (data.slot === "arrival" || forceArrivalBriefing) {
         markDeliveredArrivalBriefing(userId)
@@ -997,7 +1012,7 @@ export function ChatTab({
       proactiveInFlightRef.current = false
       if (forceArrivalBriefing) setIsSending(false)
     }
-  }, [isMuted, language, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
+  }, [isMuted, language, onMemoryPatch, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
 
   // Após o card +100 XP: a chegada passa pelo backend, que decide se precisa
   // abrir contexto semanal antes de missão.
@@ -1060,6 +1075,33 @@ export function ChatTab({
       markDeliveredArrivalBriefing(userId)
     }
   }, [memory?.hasSeenChatOpening, userId])
+
+  useEffect(() => {
+    const profileReadyForDiet = Boolean(
+      memory?.heightCm &&
+      memory?.weightKg &&
+      memory?.trainingGoal &&
+      memory?.biologicalSex &&
+      memory?.userAge &&
+      (memory?.trainingLevel || memory?.trainingStatus) &&
+      memory?.country &&
+      memory?.countryCode
+    )
+    const dietAlreadyHandled =
+      memory?.dietGenerationStatus === "generated" ||
+      memory?.dietGenerationStatus === "generating" ||
+      memory?.dietGenerationStatus === "needs_clarification" ||
+      Boolean(memory?.weeklyDietPlan)
+    if (!calibrationComplete || !profileReadyForDiet || dietAlreadyHandled || dietGenerationAfterWorkoutRef.current) return
+
+    dietGenerationAfterWorkoutRef.current = true
+    void generateDietPlan(validLang).then(() => {
+      onMemoryPatch?.({ dietGenerationStatus: "generated" })
+    }).catch((error) => {
+      dietGenerationAfterWorkoutRef.current = false
+      console.warn(`Dieta base do GUTO não foi gerada após a calibragem: ${getApiErrorMessage(error)}`)
+    })
+  }, [calibrationComplete, memory, onMemoryPatch, validLang])
 
   useEffect(() => {
     if (showInitialXpCard) return
@@ -1252,6 +1294,7 @@ export function ChatTab({
           parts: [{ text: message.text }],
         })),
         expectedResponse,
+        turnId: createGutoTurnId(userId),
       })
 
       const fala = data?.fala?.trim() || copy.emptyResponseFallback
@@ -1489,11 +1532,23 @@ export function ChatTab({
   const quickReplyOptions = activeExpectedResponse?.options?.filter((option) => option.trim()) ?? []
   const proactiveUi = useMemo(() => getProactiveMemoryUiCopy(validLang), [validLang])
   const actionableProactive = useMemo(
-    () => getActionableProactiveMemories(proactiveMemories),
-    [proactiveMemories]
+    () => getActionableProactiveMemories(proactiveMemories, memory?.activeConversationContext || null),
+    [memory?.activeConversationContext, proactiveMemories]
   )
   const showProactiveBanner =
-    !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories)
+    !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories, memory?.activeConversationContext || null)
+  const primaryProactiveMemory = actionableProactive.primary
+  const proactiveBannerHint =
+    primaryProactiveMemory?.type === "trip" &&
+    (primaryProactiveMemory.stage === "impact_confirmation" || primaryProactiveMemory.confirmationStage === "impact")
+      ? proactiveUi.hintTripImpact
+      : primaryProactiveMemory?.type === "trip"
+        ? proactiveUi.hintTripEvent
+        : actionableProactive.awaitingDiscard.length > 0
+          ? proactiveUi.hintConfirm
+          : actionableProactive.pendingValidation.length > 0
+            ? proactiveUi.hintValidate
+            : proactiveUi.hintConfirm
   const inputPlaceholder =
     contextChip?.type === "exercise"
       ? copy.exerciseInputPlaceholder
@@ -1650,8 +1705,11 @@ export function ChatTab({
               <p className="font-mono text-[9px] font-black uppercase tracking-[0.2em] text-(--guto-cyan)">
                 {copy.conversationActive}
               </p>
-              <p className="mt-1 truncate text-[12px] font-black leading-tight text-(--guto-navy)">
-                {brandName ? `GUTO & ${brandName}` : "GUTO"}
+              <p
+                className="mt-1 truncate text-[12px] font-black leading-tight text-(--guto-navy)"
+                data-testid="guto-chat-presence-label"
+              >
+                GUTO
               </p>
               <p className="mt-0.5 truncate font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-[rgba(13,35,65,0.44)]">
                 {copy.visualMemoryHint}
@@ -1716,18 +1774,14 @@ export function ChatTab({
           className="max-h-[42vh] w-full overflow-y-auto rounded-[16px] border border-[rgba(82,231,255,0.4)] bg-white/95 px-3 py-2 shadow-[0_8px_24px_rgba(82,231,255,0.18)]"
         >
           <p className="mb-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[rgba(13,35,65,0.55)]">
-            {actionableProactive.pendingConfirmation.length > 0
-              ? proactiveUi.hintConfirm
-              : actionableProactive.awaitingDiscard.length > 0
-                ? proactiveUi.hintConfirm
-                : proactiveUi.hintValidate}
+            {proactiveBannerHint}
           </p>
           <div className="flex flex-wrap gap-1.5">
             {actionableProactive.pendingConfirmation.map((memory) => (
               <div key={memory.id} className="flex w-full flex-col gap-1.5">
                 <span className="self-start rounded-full border border-[rgba(255,193,7,0.55)] bg-[rgba(255,243,205,0.9)] px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-[0.06em] text-(--guto-navy)">
                   {memory.type === "trip"
-                    ? `${proactiveUi.pendingTrip} • ${formatProactiveMemoryLabel(memory)}`
+                    ? `${memory.stage === "impact_confirmation" || memory.confirmationStage === "impact" ? proactiveUi.pendingTripImpact : proactiveUi.pendingTrip} • ${formatProactiveMemoryLabel(memory)}`
                     : proactiveUi.pendingConfirm(formatProactiveMemoryLabel(memory))}
                 </span>
                 <div className="flex flex-wrap gap-1.5">

@@ -422,6 +422,19 @@ test.describe('GUTO – Fluxos críticos', () => {
     expect(bodyText).not.toMatch(/Como posso te ajudar hoje/i)
   })
 
+  test('10c — card interno do chat mostra apenas GUTO, sem duplicar a dupla', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.goto('/')
+
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    const presenceLabel = page.getByTestId('guto-chat-presence-label')
+    await expect(presenceLabel).toBeVisible({ timeout: 8000 })
+    await expect(presenceLabel).toHaveText('GUTO')
+    await expect(presenceLabel).not.toContainText(/GUTO\s*&/i)
+  })
+
   // ── 11. Enviar mensagem no chat ────────────────────────────────────────────
   test('11 — envia mensagem no chat e recebe resposta (mocked)', async ({ page }) => {
     await injectAuthStorage(page)
@@ -766,7 +779,7 @@ test.describe('GUTO – Fluxos críticos', () => {
     await snap(page, '22-chat-keyboard-mobile')
   })
 
-  test('23 — Percurso mostra viagem registrada e treino adaptado no calendário', async ({ page }) => {
+  test('23 — Percurso agrega viagem e treino adaptado em um item do calendário', async ({ page }) => {
     const travelDate = addDays(new Date(), 4)
     const travelDateKey = toDateKey(travelDate)
     const travelDay = String(travelDate.getDate()).padStart(2, '0')
@@ -831,8 +844,8 @@ test.describe('GUTO – Fluxos críticos', () => {
     await expect(page.getByText('Memória visual')).toBeVisible({ timeout: 8000 })
 
     await page.getByRole('button', { name: new RegExp(`${travelDay} Treino adaptado`) }).click()
-    await expect(page.getByText('Viagem registrada').first()).toBeVisible({ timeout: 8000 })
-    await expect(page.getByText('Treino adaptado').first()).toBeVisible()
+    await expect(page.getByText('Treino adaptado').first()).toBeVisible({ timeout: 8000 })
+    await expect(page.getByText('Viagem registrada')).toHaveCount(0)
 
     await snap(page, '23-path-travel-adapted')
   })

@@ -149,6 +149,30 @@ export interface ProactivePrompt {
   answeredAt?: string
 }
 
+export type ActiveConversationContextKind =
+  | "travel_confirmation"
+  | "travel_impact_confirmation"
+  | "workout_substitution"
+  | "diet_substitution"
+  | "pain_safety"
+  | "weekly_checkin"
+  | "none"
+
+export interface ActiveConversationContext {
+  kind: ActiveConversationContextKind
+  source:
+    | "proactive_memory"
+    | "proactive_prompt"
+    | "substitution_context"
+    | "safety"
+    | "weekly_conversation"
+    | "none"
+  relatedMemoryId?: string
+  originalId?: string
+  dateParsed?: string
+  updatedAt: string
+}
+
 export interface SendGutoMessageRequest {
   profile: {
     name: string
@@ -164,9 +188,45 @@ export interface SendGutoMessageRequest {
     parts: { text: string }[]
   }[]
   expectedResponse?: GutoExpectedResponse | null
+  turnId: string
+}
+
+export type ProactiveMemoryStage =
+  | "event_confirmation"
+  | "continuity_question"
+  | "impact_confirmation"
+  | "confirmed_adapted"
+  | "confirmed_protected"
+  | "discarded"
+
+export interface GutoAtomicTurnDecision {
+  turnId: string
+  userMessage: string
+  previousState: {
+    activeContext: ActiveConversationContext | null | undefined
+    relatedMemoryId?: string
+    stage: ProactiveMemoryStage | "none"
+  }
+  activeContext: ActiveConversationContext | null | undefined
+  intent: string
+  relatedMemoryId?: string
+  stage: ProactiveMemoryStage | "none"
+  nextState: {
+    activeContext: ActiveConversationContext | null | undefined
+    relatedMemoryId?: string
+    stage: ProactiveMemoryStage | "none"
+  }
+  effects: string[]
+  response: Pick<SendGutoMessageResponse, "fala" | "acao" | "expectedResponse" | "avatarEmotion">
+  cards: Array<{ memoryId: string; stage: "impact_confirmation"; dateParsed?: string }>
+  memoryPatch: Partial<GutoMemory>
+  workoutEffect: string
+  dietEffect: string
+  pathEffect: string
 }
 
 export interface SendGutoMessageResponse {
+  turnId?: string
   fala?: string
   acao?: "none" | "updateWorkout" | "lock" | "changeLanguage" | "requestDeleteAccount" | "showProfile"
   expectedResponse?: GutoExpectedResponse | null
@@ -174,6 +234,7 @@ export interface SendGutoMessageResponse {
   workoutPlan?: GutoWorkoutPlan | null
   memoryPatch?: Partial<GutoMemory>
   proactiveMemoryAction?: GutoProactiveMemoryAction | null
+  turnDecision?: GutoAtomicTurnDecision
 }
 
 export interface GutoNameValidation {
@@ -229,6 +290,7 @@ export interface GutoMemory {
   proactiveMemories?: ProactiveMemory[]
   proactiveImpacts?: ProactiveImpact[]
   proactivePrompt?: ProactivePrompt | null
+  activeConversationContext?: ActiveConversationContext | null
   dietGenerationStatus?: "idle" | "ready_to_generate" | "generating" | "generated" | "needs_clarification" | "failed"
   weeklyWorkoutPlan?: {
     studentId: string
@@ -289,6 +351,7 @@ export interface GutoProactiveResponse {
   expectedResponse?: GutoExpectedResponse | null
   avatarEmotion?: GutoAvatarEmotion
   workoutPlan?: GutoWorkoutPlan | null
+  memoryPatch?: Partial<GutoMemory>
 }
 
 // ─── Diet types ───────────────────────────────────────────────────────────────
@@ -645,6 +708,7 @@ export interface GutoProactivityActionResult {
   memory?: ProactiveMemory
   impact?: ProactiveImpact | null
   fala?: string
+  expectedResponse?: GutoExpectedResponse | null
   memoryPatch?: Partial<GutoMemory>
   ignored?: boolean
 }
@@ -666,6 +730,10 @@ export interface ProactiveMemory {
   userId: string
   type: "trip" | "commitment" | "schedule" | "health" | "other"
   status: ProactiveMemoryStatus
+  eventKey?: string
+  stage?: ProactiveMemoryStage
+  sourceTurnId?: string
+  confirmationStage?: "event" | "impact"
   rawText: string
   understood: string
   dateText?: string
