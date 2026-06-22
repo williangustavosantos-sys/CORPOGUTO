@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Image from "next/image"
 import { AnimatePresence, motion } from "framer-motion"
-import { Dumbbell, Loader2, Mic, Send, TrendingUp, UtensilsCrossed, Volume2, VolumeX } from "lucide-react"
+import { Dumbbell, Loader2, Mic, Plane, Send, TrendingUp, UtensilsCrossed, Volume2, VolumeX } from "lucide-react"
 
 import { getApiErrorMessage } from "@/lib/api/client"
 import {
   cancelDiscardRequest,
+  changeProactiveMemoryDate,
   clearActiveExercise,
   confirmProactiveMemory,
   discardProactiveMemory,
@@ -35,6 +36,8 @@ import type {
 } from "@/lib/api/guto"
 import {
   formatProactiveMemoryLabel,
+  formatProactiveDate,
+  formatProactiveWeekday,
   getActionableProactiveMemories,
   getProactiveMemoryUiCopy,
   hasActionableProactiveMemories,
@@ -760,14 +763,23 @@ export function ChatTab({
   // (não depende do GUTO interpretar o chat). Remove o card na hora (otimista),
   // chama a API e reconcilia com o backend.
   const resolveProactiveConfirmation = useCallback(
-    async (memoryId: string, decision: "confirm" | "discard") => {
+    async (memoryId: string, decision: "adapted" | "protected" | "change-date" | "confirm" | "discard") => {
       gutoAudio.playGutoFeedback("tap")
       setProactiveMemories((prev) => prev.filter((item) => item.id !== memoryId))
       try {
-        const result = decision === "confirm"
-          ? await confirmProactiveMemory(memoryId)
-          : await discardProactiveMemory(memoryId)
+        const result = decision === "adapted"
+          ? await confirmProactiveMemory(memoryId, true)
+          : decision === "protected"
+            ? await confirmProactiveMemory(memoryId, false)
+            : decision === "change-date"
+              ? await changeProactiveMemoryDate(memoryId)
+              : decision === "confirm"
+                ? await confirmProactiveMemory(memoryId)
+                : await discardProactiveMemory(memoryId)
         applyProactiveActionResult(result)
+        if (decision === "change-date") {
+          window.setTimeout(() => inputRef.current?.focus(), 120)
+        }
       } catch {
         // silencioso — o refresh abaixo reflete o estado real do backend
       }
@@ -1537,18 +1549,6 @@ export function ChatTab({
   )
   const showProactiveBanner =
     !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories, memory?.activeConversationContext || null)
-  const primaryProactiveMemory = actionableProactive.primary
-  const proactiveBannerHint =
-    primaryProactiveMemory?.type === "trip" &&
-    (primaryProactiveMemory.stage === "impact_confirmation" || primaryProactiveMemory.confirmationStage === "impact")
-      ? proactiveUi.hintTripImpact
-      : primaryProactiveMemory?.type === "trip"
-        ? proactiveUi.hintTripEvent
-        : actionableProactive.awaitingDiscard.length > 0
-          ? proactiveUi.hintConfirm
-          : actionableProactive.pendingValidation.length > 0
-            ? proactiveUi.hintValidate
-            : proactiveUi.hintConfirm
   const inputPlaceholder =
     contextChip?.type === "exercise"
       ? copy.exerciseInputPlaceholder
@@ -1771,44 +1771,54 @@ export function ChatTab({
         <motion.div
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
-          className="max-h-[42vh] w-full overflow-y-auto rounded-[16px] border border-[rgba(82,231,255,0.4)] bg-white/95 px-3 py-2 shadow-[0_8px_24px_rgba(82,231,255,0.18)]"
+          className="max-h-[42vh] w-full overflow-y-auto rounded-[22px] border border-[rgba(82,231,255,0.56)] bg-white/92 px-4 py-4 shadow-[0_12px_32px_rgba(82,231,255,0.18)] backdrop-blur-[18px]"
         >
-          <p className="mb-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[rgba(13,35,65,0.55)]">
-            {proactiveBannerHint}
-          </p>
           <div className="flex flex-wrap gap-1.5">
             {actionableProactive.pendingConfirmation.map((memory) => (
-              <div key={memory.id} className="flex w-full flex-col gap-1.5">
-                <span className="self-start rounded-full border border-[rgba(255,193,7,0.55)] bg-[rgba(255,243,205,0.9)] px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-[0.06em] text-(--guto-navy)">
-                  {memory.type === "trip"
-                    ? `${memory.stage === "impact_confirmation" || memory.confirmationStage === "impact" ? proactiveUi.pendingTripImpact : proactiveUi.pendingTrip} • ${formatProactiveMemoryLabel(memory)}`
-                    : proactiveUi.pendingConfirm(formatProactiveMemoryLabel(memory))}
-                </span>
-                <div className="flex flex-wrap gap-1.5">
+              <div key={memory.id} className="flex w-full flex-col">
+                {memory.type === "trip" ? (
+                  <>
+                    <div className="flex items-center gap-2 text-(--guto-cyan)">
+                      <Plane className="h-4 w-4" aria-hidden="true" />
+                      <p className="text-sm font-black tracking-[0.04em] text-(--guto-navy)">{proactiveUi.tripTitle}</p>
+                    </div>
+                    <p className="mt-3 text-[15px] font-black leading-tight text-(--guto-navy)">
+                      {formatProactiveWeekday(memory, validLang as SupportedLanguage)}
+                    </p>
+                    <p className="mt-0.5 font-mono text-[11px] font-bold tracking-[0.08em] text-[rgba(13,35,65,0.56)]">
+                      {formatProactiveDate(memory, validLang as SupportedLanguage)}
+                    </p>
+                    <p className="mt-3 text-[13px] font-bold text-(--guto-navy)">{proactiveUi.tripQuestion}</p>
+                  </>
+                ) : (
+                  <p className="text-sm font-black text-(--guto-navy)">
+                    {proactiveUi.pendingConfirm(formatProactiveMemoryLabel(memory))}
+                  </p>
+                )}
+                <div className="mt-3 grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => void resolveProactiveConfirmation(memory.id, "confirm")}
-                    className="rounded-full bg-(--guto-cyan) px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-navy)"
+                    onClick={() => void resolveProactiveConfirmation(memory.id, memory.type === "trip" ? "adapted" : "confirm")}
+                    className="min-h-11 rounded-full border border-(--guto-cyan) bg-[rgba(82,231,255,0.2)] px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.22)]"
                   >
                     {proactiveUi.btnYes}
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      gutoAudio.playGutoFeedback("tap")
-                      inputRef.current?.focus()
-                    }}
-                    className="rounded-full border border-[rgba(82,231,255,0.5)] bg-white px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-cyan)"
-                  >
-                    {proactiveUi.btnFix}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void resolveProactiveConfirmation(memory.id, "discard")}
-                    className="rounded-full border border-[rgba(13,35,65,0.25)] bg-white px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-[rgba(13,35,65,0.7)]"
+                    onClick={() => void resolveProactiveConfirmation(memory.id, memory.type === "trip" ? "protected" : "discard")}
+                    className="min-h-11 rounded-full border border-[rgba(13,35,65,0.18)] bg-white/72 px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy)"
                   >
                     {proactiveUi.btnNo}
                   </button>
+                  {memory.type === "trip" ? (
+                    <button
+                      type="button"
+                      onClick={() => void resolveProactiveConfirmation(memory.id, "change-date")}
+                      className="col-span-2 min-h-11 rounded-full border border-[rgba(82,231,255,0.48)] bg-white/62 px-3 py-2 font-mono text-[10px] font-black tracking-[0.12em] text-[rgba(13,35,65,0.7)]"
+                    >
+                      {proactiveUi.btnFix}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ))}

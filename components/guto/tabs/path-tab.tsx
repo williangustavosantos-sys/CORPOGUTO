@@ -18,6 +18,11 @@ import {
 } from "lucide-react"
 
 import { API_URL } from "@/lib/api/client"
+import {
+  changeProactiveMemoryDate,
+  confirmProactiveMemory,
+  discardProactiveMemory,
+} from "@/lib/api/guto"
 import type { GutoMemory, GutoWorkoutPlan, WorkoutValidationRecord } from "@/lib/api/guto"
 import {
   buildGutoPathMonth,
@@ -36,6 +41,8 @@ interface PathTabProps {
   workoutPlan?: GutoWorkoutPlan | null
   currentEvolution: EvolutionStage
   validationHistory?: WorkoutValidationRecord[]
+  onMemoryPatch?: (patch: Partial<GutoMemory>) => void
+  onOpenChat?: () => void
 }
 
 const pathCopy = {
@@ -52,6 +59,11 @@ const pathCopy = {
     noStreak: "Sequência ainda zerada",
     close: "FECHAR",
     validated: "Últimos treinos validados",
+    alter: "ALTERAR",
+    changeDate: "DATA",
+    adaptedYes: "TREINO SIM",
+    adaptedNo: "TREINO NÃO",
+    cancelTrip: "CANCELAR",
     status: {
       completed: "Treino concluído",
       adapted: "Treino adaptado",
@@ -75,6 +87,11 @@ const pathCopy = {
     noStreak: "Streak still at zero",
     close: "CLOSE",
     validated: "Last validated workouts",
+    alter: "CHANGE",
+    changeDate: "DATE",
+    adaptedYes: "WORKOUT YES",
+    adaptedNo: "WORKOUT NO",
+    cancelTrip: "CANCEL",
     status: {
       completed: "Workout completed",
       adapted: "Workout adapted",
@@ -98,6 +115,11 @@ const pathCopy = {
     noStreak: "Sequenza ancora a zero",
     close: "CHIUDI",
     validated: "Ultimi allenamenti validati",
+    alter: "MODIFICA",
+    changeDate: "DATA",
+    adaptedYes: "ALLENAMENTO SÌ",
+    adaptedNo: "ALLENAMENTO NO",
+    cancelTrip: "ANNULLA",
     status: {
       completed: "Allenamento completato",
       adapted: "Allenamento adattato",
@@ -159,12 +181,14 @@ function eventColor(kind: GutoPathEvent["kind"]) {
   return "text-(--guto-cyan)"
 }
 
-export function PathTab({ language, memory, workoutPlan, validationHistory }: PathTabProps) {
+export function PathTab({ language, memory, workoutPlan, validationHistory, onMemoryPatch, onOpenChat }: PathTabProps) {
   const validLang = getLanguage(language)
   const locale = translations[validLang]
   const copy = pathCopy[validLang]
   const [selectedPoster, setSelectedPoster] = useState<string | null>(null)
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null)
+  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null)
+  const [updatingMemoryId, setUpdatingMemoryId] = useState<string | null>(null)
   const pathMonth = useMemo(
     () =>
       buildGutoPathMonth({
@@ -187,6 +211,24 @@ export function PathTab({ language, memory, workoutPlan, validationHistory }: Pa
   }).format(selectedDay.date)
   const todayXp = todayDay?.xp ?? 0
   const hasWorkoutPlan = Boolean(workoutPlan?.exercises?.length)
+
+  const runTripAction = async (
+    memoryId: string,
+    action: "date" | "adapted" | "protected" | "cancel"
+  ) => {
+    setUpdatingMemoryId(memoryId)
+    const result = action === "date"
+      ? await changeProactiveMemoryDate(memoryId)
+      : action === "adapted"
+        ? await confirmProactiveMemory(memoryId, true)
+        : action === "protected"
+          ? await confirmProactiveMemory(memoryId, false)
+          : await discardProactiveMemory(memoryId, true)
+    if (result.memoryPatch) onMemoryPatch?.(result.memoryPatch)
+    setUpdatingMemoryId(null)
+    setEditingMemoryId(null)
+    if (action === "date" && result.ok) onOpenChat?.()
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col pb-3">
@@ -302,6 +344,25 @@ export function PathTab({ language, memory, workoutPlan, validationHistory }: Pa
                       <p className="mt-0.5 text-xs font-semibold leading-snug text-[rgba(13,35,65,0.56)]">
                         {event.detail}
                       </p>
+                    ) : null}
+                    {event.editable && event.memoryId ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setEditingMemoryId((current) => current === event.memoryId ? null : event.memoryId!)}
+                          className="mt-2 min-h-11 rounded-full border border-[rgba(82,231,255,0.48)] bg-white/58 px-4 py-2 font-mono text-[9px] font-black tracking-[0.12em] text-(--guto-navy)"
+                        >
+                          {copy.alter}
+                        </button>
+                        {editingMemoryId === event.memoryId ? (
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <button type="button" disabled={updatingMemoryId === event.memoryId} onClick={() => void runTripAction(event.memoryId!, "date")} className="min-h-11 rounded-full border border-white/70 bg-white/70 px-2 font-mono text-[8px] font-black tracking-[0.08em] text-(--guto-navy) disabled:opacity-45">{copy.changeDate}</button>
+                            <button type="button" disabled={updatingMemoryId === event.memoryId} onClick={() => void runTripAction(event.memoryId!, "adapted")} className="min-h-11 rounded-full border border-white/70 bg-white/70 px-2 font-mono text-[8px] font-black tracking-[0.08em] text-(--guto-navy) disabled:opacity-45">{copy.adaptedYes}</button>
+                            <button type="button" disabled={updatingMemoryId === event.memoryId} onClick={() => void runTripAction(event.memoryId!, "protected")} className="min-h-11 rounded-full border border-white/70 bg-white/70 px-2 font-mono text-[8px] font-black tracking-[0.08em] text-(--guto-navy) disabled:opacity-45">{copy.adaptedNo}</button>
+                            <button type="button" disabled={updatingMemoryId === event.memoryId} onClick={() => void runTripAction(event.memoryId!, "cancel")} className="min-h-11 rounded-full border border-[rgba(167,70,70,0.24)] bg-white/70 px-2 font-mono text-[8px] font-black tracking-[0.08em] text-[rgba(167,70,70,0.82)] disabled:opacity-45">{copy.cancelTrip}</button>
+                          </div>
+                        ) : null}
+                      </>
                     ) : null}
                   </div>
                 </div>
