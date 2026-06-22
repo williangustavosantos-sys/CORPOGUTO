@@ -152,6 +152,7 @@ export interface ProactivePrompt {
 export type ActiveConversationContextKind =
   | "travel_confirmation"
   | "travel_impact_confirmation"
+  | "travel_date_correction"
   | "workout_substitution"
   | "diet_substitution"
   | "pain_safety"
@@ -195,6 +196,7 @@ export type ProactiveMemoryStage =
   | "event_confirmation"
   | "continuity_question"
   | "impact_confirmation"
+  | "date_correction"
   | "confirmed_adapted"
   | "confirmed_protected"
   | "discarded"
@@ -734,6 +736,8 @@ export interface ProactiveMemory {
   stage?: ProactiveMemoryStage
   sourceTurnId?: string
   confirmationStage?: "event" | "impact"
+  proposedTrainingAdapted?: boolean
+  trainingAdapted?: boolean
   rawText: string
   understood: string
   dateText?: string
@@ -817,11 +821,14 @@ export async function getProactiveMemories(): Promise<ProactiveMemory[]> {
 
 const failedProactivityAction: GutoProactivityActionResult = { ok: false }
 
-export async function confirmProactiveMemory(memoryId: string): Promise<GutoProactivityActionResult> {
+export async function confirmProactiveMemory(
+  memoryId: string,
+  trainingAdapted?: boolean
+): Promise<GutoProactivityActionResult> {
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/confirm", {
       method: "POST",
-      body: JSON.stringify({ memoryId }),
+      body: JSON.stringify({ memoryId, ...(typeof trainingAdapted === "boolean" ? { trainingAdapted } : {}) }),
     })
     return result
   } catch {
@@ -829,13 +836,27 @@ export async function confirmProactiveMemory(memoryId: string): Promise<GutoProa
   }
 }
 
-export async function discardProactiveMemory(memoryId: string): Promise<GutoProactivityActionResult> {
+export async function discardProactiveMemory(
+  memoryId: string,
+  confirmedByUser = false
+): Promise<GutoProactivityActionResult> {
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/discard", {
       method: "POST",
-      body: JSON.stringify({ memoryId }),
+      body: JSON.stringify({ memoryId, confirmedByUser }),
     })
     return result
+  } catch {
+    return failedProactivityAction
+  }
+}
+
+export async function changeProactiveMemoryDate(memoryId: string): Promise<GutoProactivityActionResult> {
+  try {
+    return await apiRequest<GutoProactivityActionResult>("/guto/proactivity/change-date", {
+      method: "POST",
+      body: JSON.stringify({ memoryId }),
+    })
   } catch {
     return failedProactivityAction
   }

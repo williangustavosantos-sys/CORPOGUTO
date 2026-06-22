@@ -2215,6 +2215,8 @@ export function GutoApp({
             workoutPlan={localizedWorkoutPlan}
             currentEvolution={evolution}
             validationHistory={memory?.validationHistory}
+            onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
+            onOpenChat={() => setActiveTab("guto")}
           />
         )
       case "evolucoes":

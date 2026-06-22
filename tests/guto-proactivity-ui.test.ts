@@ -38,12 +38,12 @@ describe("guto proactivity UI", () => {
   it("usa copy de decisao visual para viagem detectada", () => {
     const copy = getProactiveMemoryUiCopy("pt-BR")
 
-    assert.equal(copy.pendingTrip, "VIAGEM DETECTADA")
-    assert.equal(copy.pendingTripImpact, "IMPACTO NO TREINO")
-    assert.equal(copy.btnYes, "Confirmar")
-    assert.equal(copy.btnFix, "Alterar data")
-    assert.equal(copy.btnNo, "Fechar")
-    assert.equal(formatProactiveMemoryLabel(tripMemory()), "Viagem provável em 2026-06-19 (19/06)")
+    assert.equal(copy.tripTitle, "Viagem")
+    assert.equal(copy.tripQuestion, "Treino adaptado na viagem?")
+    assert.equal(copy.btnYes, "SIM")
+    assert.equal(copy.btnFix, "ALTERAR DATA")
+    assert.equal(copy.btnNo, "NÃO")
+    assert.equal(formatProactiveMemoryLabel(tripMemory()), "Viagem provável em 2026-06-19 (19/06/2026)")
   })
 
   it("deduplica cards iguais e mostra só um contexto principal", () => {

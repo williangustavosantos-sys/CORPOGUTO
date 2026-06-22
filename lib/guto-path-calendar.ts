@@ -35,6 +35,8 @@ export interface GutoPathEvent {
   label: string
   detail?: string
   priority: number
+  memoryId?: string
+  editable?: boolean
 }
 
 export interface GutoPathDay {
@@ -57,7 +59,6 @@ export interface GutoPathMonth {
 }
 
 const VISIBLE_MEMORY_STATUSES = new Set<ProactiveMemory["status"]>([
-  "pending_confirmation",
   "confirmed",
   "enriched",
   "surfaced",
@@ -199,15 +200,17 @@ function memoryEvent(memory: ProactiveMemory, language: SupportedLanguage): Guto
   const text = copy[language]
   const base = {
     id: `memory:${memory.id}`,
-    detail: memory.understood || memory.rawText,
-    priority: memory.status === "pending_confirmation" ? 78 : 82,
+    detail: memory.type === "trip" ? undefined : memory.understood || memory.rawText,
+    priority: 82,
+    memoryId: memory.id,
+    editable: memory.type === "trip" && ["confirmed", "enriched", "surfaced"].includes(memory.status),
   }
 
   if (memory.type === "trip") {
     return {
       ...base,
       kind: "travel",
-      label: memory.status === "pending_confirmation" ? text.travelPending : text.travelRegistered,
+      label: text.travelRegistered,
     }
   }
   if (memory.type === "health") return { ...base, kind: "pain", label: text.painRegistered, priority: 86 }
@@ -218,15 +221,17 @@ function memoryEvent(memory: ProactiveMemory, language: SupportedLanguage): Guto
 
 function impactEvent(impact: ProactiveImpact, language: SupportedLanguage): GutoPathEvent | null {
   const text = copy[language]
-  const detail = impact.decision?.message
+  const isTravel = impact.decision?.reason === "travel"
 
   if (impact.workoutEffect === "protected" || impact.missionEffect === "protected") {
     return {
       id: `impact:${impact.id}:protected`,
       kind: "day_protected",
-      label: text.dayProtected,
-      detail,
+      label: isTravel ? text.travelRegistered : text.dayProtected,
+      detail: text.dayProtected,
       priority: 96,
+      memoryId: impact.memoryId,
+      editable: isTravel,
     }
   }
 
@@ -234,9 +239,11 @@ function impactEvent(impact: ProactiveImpact, language: SupportedLanguage): Guto
     return {
       id: `impact:${impact.id}:adapted`,
       kind: "workout_adapted",
-      label: text.workoutAdapted,
-      detail,
+      label: isTravel ? text.travelRegistered : text.workoutAdapted,
+      detail: text.workoutAdapted,
       priority: 92,
+      memoryId: impact.memoryId,
+      editable: isTravel,
     }
   }
 
@@ -245,7 +252,6 @@ function impactEvent(impact: ProactiveImpact, language: SupportedLanguage): Guto
       id: `impact:${impact.id}:pending`,
       kind: "pending",
       label: impact.decision?.reason === "travel" ? text.defineTravelTraining : text.defineDecision,
-      detail,
       priority: 88,
     }
   }
@@ -334,7 +340,9 @@ export function buildGutoPathMonth({
     })
   }
 
-  const visibleImpacts = (memory?.proactiveImpacts || []).filter((impact) => VISIBLE_IMPACT_STATUSES.has(impact.status))
+  const visibleImpacts = (memory?.proactiveImpacts || []).filter(
+    (impact) => VISIBLE_IMPACT_STATUSES.has(impact.status) && impact.pathEffect !== "none"
+  )
   const impactByMemoryId = new Map<string, ProactiveImpact>()
   for (const impact of visibleImpacts) {
     const current = impactByMemoryId.get(impact.memoryId)

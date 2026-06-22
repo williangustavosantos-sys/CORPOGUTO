@@ -68,7 +68,7 @@ describe("proactivity action result UI", () => {
       updatedAt: "2026-06-18T09:00:00.000Z",
     })
 
-    assert.equal(label, "Viagem amanhã (19/06)")
+    assert.equal(label, "Viagem amanhã (19/06/2026)")
   })
 
   it("mostra um card somente no estágio de confirmação do impacto", () => {

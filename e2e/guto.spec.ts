@@ -845,7 +845,8 @@ test.describe('GUTO – Fluxos críticos', () => {
 
     await page.getByRole('button', { name: new RegExp(`${travelDay} Treino adaptado`) }).click()
     await expect(page.getByText('Treino adaptado').first()).toBeVisible({ timeout: 8000 })
-    await expect(page.getByText('Viagem registrada')).toHaveCount(0)
+    await expect(page.getByText('Viagem registrada')).toBeVisible({ timeout: 8000 })
+    await expect(page.getByRole('button', { name: 'ALTERAR' })).toBeVisible()
 
     await snap(page, '23-path-travel-adapted')
   })
@@ -855,6 +856,47 @@ test.describe('GUTO – Fluxos críticos', () => {
     await setupApiMocks(page)
 
     const seenInputs: string[] = []
+    const confirmPayloads: Array<{ memoryId?: string; trainingAdapted?: boolean }> = []
+    const travelDate = addDays(new Date(), 3)
+    const travelDateKey = toDateKey(travelDate)
+    const travelDateLabel = new Intl.DateTimeFormat('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).format(travelDate)
+    let cardPending = false
+    const pendingTrip = {
+      id: 'pm-trip-card-e2e',
+      userId: TEST_USER_ID,
+      type: 'trip',
+      status: 'pending_confirmation',
+      stage: 'impact_confirmation',
+      confirmationStage: 'impact',
+      proposedTrainingAdapted: true,
+      rawText: 'viajo sexta; consigo treinar na viagem',
+      understood: 'Viagem com treino adaptado pendente',
+      dateText: 'sexta',
+      dateParsed: travelDateKey,
+      weekKey: 'e2e-week',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/memories'), (route) =>
+      route.fulfill(jsonBody({ memories: cardPending ? [pendingTrip] : [] }))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/confirm'), async (route) => {
+      confirmPayloads.push(route.request().postDataJSON() as { memoryId?: string; trainingAdapted?: boolean })
+      cardPending = false
+      return route.fulfill(jsonBody({
+        ok: true,
+        memory: { ...pendingTrip, status: 'confirmed', stage: 'confirmed_adapted', trainingAdapted: true },
+        fala: 'Fechado. Salvei tua viagem. Agora vamos cuidar de hoje.',
+        memoryPatch: {
+          proactiveMemories: [{ ...pendingTrip, status: 'confirmed', stage: 'confirmed_adapted', trainingAdapted: true }],
+          proactiveImpacts: [{ memoryId: pendingTrip.id, status: 'active', workoutEffect: 'short_light' }],
+        },
+      }))
+    })
     await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto'), async (route) => {
       if (route.request().method() !== 'POST') return route.continue()
       const body = route.request().postDataJSON() as { input?: string }
@@ -872,14 +914,21 @@ test.describe('GUTO – Fluxos críticos', () => {
           },
         }))
       }
+      cardPending = true
       return route.fulfill(jsonBody({
-        fala: 'Viagem registrada. Treino adaptado.',
+        fala: 'Confirma no card e eu já sigo organizando tua semana.',
         acao: 'none',
         avatarEmotion: 'default',
         expectedResponse: null,
         memoryPatch: {
-          proactiveMemories: [],
+          proactiveMemories: [pendingTrip],
           proactiveImpacts: [],
+          activeConversationContext: {
+            kind: 'travel_impact_confirmation',
+            source: 'state_resolver',
+            relatedMemoryId: pendingTrip.id,
+            updatedAt: new Date().toISOString(),
+          },
         },
       }))
     })
@@ -894,10 +943,26 @@ test.describe('GUTO – Fluxos críticos', () => {
 
     await expect(page.getByRole('button', { name: 'SIM' })).toBeVisible({ timeout: 10000 })
     await page.getByRole('button', { name: 'SIM' }).click()
-    await expect(page.getByText('Viagem registrada. Treino adaptado.')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Viagem', { exact: true })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(travelDateLabel)).toBeVisible()
+    const tripCardQuestion = page.getByText('Treino adaptado na viagem?')
+    await expect(tripCardQuestion).toBeVisible()
+    await expect(page.getByRole('button', { name: 'ALTERAR DATA' })).toBeVisible()
+
+    const cardBeforeConfirmation = await tripCardQuestion.locator('..').innerText()
+    expect(cardBeforeConfirmation).not.toMatch(/workflow|pending|memory|status|impacto/i)
+
+    await page.reload()
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText('Treino adaptado na viagem?')).toBeVisible({ timeout: 10000 })
+
+    await page.getByRole('button', { name: 'SIM' }).click()
+    await expect(page.getByText('Fechado. Salvei tua viagem. Agora vamos cuidar de hoje.')).toBeVisible({ timeout: 10000 })
 
     await expect.poll(() => seenInputs.length).toBeGreaterThanOrEqual(2)
     expect(seenInputs[1]).toContain('consigo treinar na viagem')
+    await expect.poll(() => confirmPayloads.length).toBe(1)
+    expect(confirmPayloads[0]).toEqual({ memoryId: pendingTrip.id, trainingAdapted: true })
 
     await snap(page, '24-travel-quick-reply')
   })
