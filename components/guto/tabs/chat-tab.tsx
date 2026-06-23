@@ -8,7 +8,6 @@ import { Dumbbell, Loader2, Mic, Plane, Send, TrendingUp, UtensilsCrossed, Volum
 import { getApiErrorMessage } from "@/lib/api/client"
 import {
   cancelDiscardRequest,
-  changeProactiveMemoryDate,
   clearActiveExercise,
   confirmProactiveMemory,
   discardProactiveMemory,
@@ -138,6 +137,15 @@ interface StoredChatState {
   messages: Message[]
   expectedResponse: GutoExpectedResponse | null
   expectedResponseMessageId: string | null
+  pendingTurn?: PendingChatTurn | null
+}
+
+interface PendingChatTurn {
+  turnId: string
+  displayText: string
+  modelInput: string
+  language: SupportedLanguage
+  createdAt: string
 }
 
 const chatCopy: Record<
@@ -167,6 +175,8 @@ const chatCopy: Record<
     voiceOn: string
     voiceOff: string
     quickReplyLabel: string
+    cardBlockPrompt: string
+    dateInputLabel: string
   }
 > = {
   "pt-BR": {
@@ -197,6 +207,8 @@ const chatCopy: Record<
     voiceOn: "VOZ ON",
     voiceOff: "VOZ OFF",
     quickReplyLabel: "Resposta rápida",
+    cardBlockPrompt: "Confirma o card para eu seguir.",
+    dateInputLabel: "Nova data",
   },
   "en-US": {
     channel: "Oracle channel",
@@ -226,6 +238,8 @@ const chatCopy: Record<
     voiceOn: "VOICE ON",
     voiceOff: "VOICE OFF",
     quickReplyLabel: "Quick reply",
+    cardBlockPrompt: "Confirm the card so I can continue.",
+    dateInputLabel: "New date",
   },
   "it-IT": {
     channel: "Canale dell'oracolo",
@@ -255,6 +269,8 @@ const chatCopy: Record<
     voiceOn: "VOCE ON",
     voiceOff: "VOCE OFF",
     quickReplyLabel: "Risposta rapida",
+    cardBlockPrompt: "Conferma la card per continuare.",
+    dateInputLabel: "Nuova data",
   },
 }
 
@@ -461,6 +477,7 @@ function readStoredChatState(userId: string): StoredChatState | null {
       messages?: Array<Omit<Message, "timestamp"> & { timestamp?: string }>
       expectedResponse?: GutoExpectedResponse | null
       expectedResponseMessageId?: string | null
+      pendingTurn?: PendingChatTurn | null
     }
     const messages = Array.isArray(parsed.messages)
       ? parsed.messages
@@ -479,6 +496,9 @@ function readStoredChatState(userId: string): StoredChatState | null {
       ),
       expectedResponse: parsed.expectedResponse || null,
       expectedResponseMessageId: parsed.expectedResponseMessageId || null,
+      pendingTurn: parsed.pendingTurn && typeof parsed.pendingTurn.turnId === "string"
+        ? parsed.pendingTurn
+        : null,
     }
   } catch {
     return null
@@ -498,6 +518,7 @@ function writeStoredChatState(userId: string, state: StoredChatState) {
         })),
         expectedResponse: state.expectedResponse,
         expectedResponseMessageId: state.expectedResponseMessageId,
+        pendingTurn: state.pendingTurn || null,
       })
     )
   } catch {}
@@ -616,12 +637,14 @@ export function ChatTab({
         messages: [],
         expectedResponse: null,
         expectedResponseMessageId: null,
+        pendingTurn: null,
       }
     }
     return {
       messages: [localOpeningMessage],
       expectedResponse: null,
       expectedResponseMessageId: null,
+      pendingTurn: null,
     }
   }, [
     calibrationComplete,
@@ -633,13 +656,16 @@ export function ChatTab({
 
   const [messages, setMessages] = useState<Message[]>(initialChatState.messages)
   const [input, setInput] = useState("")
-  const [isSending, setIsSending] = useState(false)
+  const [pendingTurn, setPendingTurn] = useState<PendingChatTurn | null>(initialChatState.pendingTurn || null)
+  const [isSending, setIsSending] = useState(Boolean(initialChatState.pendingTurn))
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [showInitialXpCard, setShowInitialXpCard] = useState(false)
   const [contextChip, setContextChip] = useState<{ type: "exercise" | "meal"; label: string } | null>(null)
   const [proactiveMemories, setProactiveMemories] = useState<ProactiveMemory[]>([])
+  const [editingTripMemoryId, setEditingTripMemoryId] = useState<string | null>(null)
+  const [tripDateDraft, setTripDateDraft] = useState("")
   const [expectedResponse, setExpectedResponse] = useState<GutoExpectedResponse | null>(initialChatState.expectedResponse)
   const [expectedResponseMessageId, setExpectedResponseMessageId] = useState<string | null>(
     initialChatState.expectedResponseMessageId
@@ -649,6 +675,7 @@ export function ChatTab({
   const inputRef = useRef<HTMLInputElement>(null)
   const voiceQueueRef = useRef<GutoVoiceQueue | null>(null)
   const messagesRef = useRef<Message[]>(messages)
+  const pendingTurnRef = useRef<PendingChatTurn | null>(pendingTurn)
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null)
   const speechTranscriptRef = useRef("")
   const speechResultHandledRef = useRef(false)
@@ -659,6 +686,7 @@ export function ChatTab({
   const processedProactiveActionKeysRef = useRef<Set<string>>(new Set())
   const proactiveInFlightRef = useRef(false)
   const sendInFlightRef = useRef(false)
+  const blockingProactiveCardRef = useRef(false)
   const lastProactiveKeyRef = useRef<string | null>(null)
   const arrivalBriefingRequestedRef = useRef(false)
   const suppressProactivityUntilRef = useRef(0)
@@ -709,12 +737,14 @@ export function ChatTab({
 
   useEffect(() => {
     messagesRef.current = messages
+    pendingTurnRef.current = pendingTurn
     writeStoredChatState(userId, {
       messages,
       expectedResponse: pendingExpectedResponseRef.current,
       expectedResponseMessageId: pendingExpectedResponseMessageIdRef.current,
+      pendingTurn,
     })
-  }, [expectedResponse, expectedResponseMessageId, messages, userId])
+  }, [expectedResponse, expectedResponseMessageId, messages, pendingTurn, userId])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -763,29 +793,48 @@ export function ChatTab({
   // (não depende do GUTO interpretar o chat). Remove o card na hora (otimista),
   // chama a API e reconcilia com o backend.
   const resolveProactiveConfirmation = useCallback(
-    async (memoryId: string, decision: "adapted" | "protected" | "change-date" | "confirm" | "discard") => {
+    async (memory: ProactiveMemory, decision: "confirm" | "discard") => {
       gutoAudio.playGutoFeedback("tap")
+      const memoryId = memory.id
       setProactiveMemories((prev) => prev.filter((item) => item.id !== memoryId))
       try {
-        const result = decision === "adapted"
-          ? await confirmProactiveMemory(memoryId, true)
-          : decision === "protected"
-            ? await confirmProactiveMemory(memoryId, false)
-            : decision === "change-date"
-              ? await changeProactiveMemoryDate(memoryId)
-              : decision === "confirm"
-                ? await confirmProactiveMemory(memoryId)
-                : await discardProactiveMemory(memoryId)
+        const trainingAdapted = memory.type === "trip"
+          ? memory.proposedTrainingAdapted ?? memory.trainingAdapted
+          : undefined
+        const result = decision === "confirm"
+          ? await confirmProactiveMemory(memoryId, trainingAdapted)
+          : await discardProactiveMemory(memoryId)
         applyProactiveActionResult(result)
-        if (decision === "change-date") {
-          window.setTimeout(() => inputRef.current?.focus(), 120)
-        }
       } catch {
         // silencioso — o refresh abaixo reflete o estado real do backend
       }
       await refreshProactiveMemories()
     },
     [applyProactiveActionResult, refreshProactiveMemories]
+  )
+
+  const startTripDateEdit = useCallback((memory: ProactiveMemory) => {
+    gutoAudio.playGutoFeedback("tap")
+    setEditingTripMemoryId(memory.id)
+    setTripDateDraft(memory.dateParsed || "")
+  }, [])
+
+  const saveTripDateEdit = useCallback(
+    async (memory: ProactiveMemory) => {
+      if (!tripDateDraft.trim()) return
+      gutoAudio.playGutoFeedback("tap")
+      const date = tripDateDraft.trim()
+      try {
+        const result = await updateProactiveMemory(memory.id, { dateParsed: date, dateText: date })
+        applyProactiveActionResult(result)
+      } catch {
+        // refresh abaixo reconcilia estado real
+      }
+      setEditingTripMemoryId(null)
+      setTripDateDraft("")
+      await refreshProactiveMemories()
+    },
+    [applyProactiveActionResult, refreshProactiveMemories, tripDateDraft]
   )
 
   const triggerProactivityExtraction = useCallback(
@@ -1125,7 +1174,7 @@ export function ChatTab({
   }, [refreshProactiveMemories, showInitialXpCard])
 
   const startRecording = async () => {
-    if (isSending || isRecording) return
+    if (isSending || isRecording || blockingProactiveCardRef.current) return
 
     const SpeechRecognition = getBrowserSpeechRecognition()
     const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "unknown"
@@ -1247,7 +1296,7 @@ export function ChatTab({
   const sendTextToGuto = useCallback(async (
     displayText: string,
     modelInput = displayText,
-    options?: { hideUserBubble?: boolean }
+    options?: { hideUserBubble?: boolean; turnId?: string; resumePending?: boolean }
   ) => {
     if (sendInFlightRef.current) return
     sendInFlightRef.current = true
@@ -1266,9 +1315,30 @@ export function ChatTab({
       timestamp: new Date(),
     }
 
+    const turnId = options?.turnId || createGutoTurnId(userId)
+    const nextPendingTurn: PendingChatTurn = options?.resumePending && pendingTurnRef.current
+      ? pendingTurnRef.current
+      : {
+          turnId,
+          displayText,
+          modelInput,
+          language: safeLanguage,
+          createdAt: new Date().toISOString(),
+        }
+    const nextMessages = options?.hideUserBubble ? messagesRef.current : [...messagesRef.current, userMessage]
+
     if (!options?.hideUserBubble) {
-      setMessages((prev) => [...prev, userMessage])
+      messagesRef.current = nextMessages
+      setMessages(nextMessages)
     }
+    pendingTurnRef.current = nextPendingTurn
+    setPendingTurn(nextPendingTurn)
+    writeStoredChatState(userId, {
+      messages: nextMessages,
+      expectedResponse: pendingExpectedResponseRef.current,
+      expectedResponseMessageId: pendingExpectedResponseMessageIdRef.current,
+      pendingTurn: nextPendingTurn,
+    })
     setInput("")
     setIsSending(true)
 
@@ -1306,7 +1376,7 @@ export function ChatTab({
           parts: [{ text: message.text }],
         })),
         expectedResponse,
-        turnId: createGutoTurnId(userId),
+        turnId: nextPendingTurn.turnId,
       })
 
       const fala = data?.fala?.trim() || copy.emptyResponseFallback
@@ -1364,6 +1434,8 @@ export function ChatTab({
       if (!isMuted) {
         void synthesizeAndPlay(fala, safeLanguage)
       }
+      pendingTurnRef.current = null
+      setPendingTurn(null)
     } catch {
       syncExpectedResponse(null, null)
       stopTypingLoop()
@@ -1377,6 +1449,8 @@ export function ChatTab({
           avatarEmotion: "default",
         },
       ])
+      pendingTurnRef.current = null
+      setPendingTurn(null)
     } finally {
       sendInFlightRef.current = false
       setIsSending(false)
@@ -1398,6 +1472,25 @@ export function ChatTab({
     userId,
     userName,
   ])
+
+  useEffect(() => {
+    if (!pendingTurn) return
+    if (sendInFlightRef.current) return
+
+    const ageMs = Date.now() - new Date(pendingTurn.createdAt).getTime()
+    if (!Number.isFinite(ageMs) || ageMs > 2 * 60 * 1000) {
+      pendingTurnRef.current = null
+      setPendingTurn(null)
+      setIsSending(false)
+      return
+    }
+
+    void sendTextToGuto(pendingTurn.displayText, pendingTurn.modelInput, {
+      hideUserBubble: true,
+      turnId: pendingTurn.turnId,
+      resumePending: true,
+    })
+  }, [pendingTurn, sendTextToGuto])
 
   useEffect(() => {
     if (!pendingExerciseQuestion) return
@@ -1496,6 +1589,7 @@ export function ChatTab({
   ])
 
   const handleSend = async () => {
+    if (blockingProactiveCardRef.current) return
     if (!input.trim() || isSending) return
     const text = input.trim()
     await sendTextToGuto(text, wrapWithActiveContext(text))
@@ -1527,7 +1621,7 @@ export function ChatTab({
 
   const handleQuickReply = useCallback(
     async (option: string, response: GutoExpectedResponse) => {
-      if (isSending) return
+      if (isSending || blockingProactiveCardRef.current) return
       const displayText = option.trim()
       const modelText = resolveQuickReplyModelInput(displayText, response)
       await sendTextToGuto(displayText, wrapWithActiveContext(modelText))
@@ -1549,6 +1643,10 @@ export function ChatTab({
   )
   const showProactiveBanner =
     !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories, memory?.activeConversationContext || null)
+  const hasBlockingProactiveCard = showProactiveBanner && actionableProactive.pendingConfirmation.length > 0
+  useEffect(() => {
+    blockingProactiveCardRef.current = hasBlockingProactiveCard
+  }, [hasBlockingProactiveCard])
   const inputPlaceholder =
     contextChip?.type === "exercise"
       ? copy.exerciseInputPlaceholder
@@ -1788,7 +1886,23 @@ export function ChatTab({
                     <p className="mt-0.5 font-mono text-[11px] font-bold tracking-[0.08em] text-[rgba(13,35,65,0.56)]">
                       {formatProactiveDate(memory, validLang as SupportedLanguage)}
                     </p>
-                    <p className="mt-3 text-[13px] font-bold text-(--guto-navy)">{proactiveUi.tripQuestion}</p>
+                    <p className="mt-3 text-[13px] font-bold text-(--guto-navy)">
+                      {proactiveUi.tripQuestion(
+                        formatProactiveDate(memory, validLang as SupportedLanguage),
+                        memory.proposedTrainingAdapted ?? memory.trainingAdapted,
+                      )}
+                    </p>
+                    {editingTripMemoryId === memory.id ? (
+                      <label className="mt-3 flex flex-col gap-1.5 text-left font-mono text-[9px] font-black uppercase tracking-[0.12em] text-[rgba(13,35,65,0.55)]">
+                        {copy.dateInputLabel}
+                        <input
+                          type="date"
+                          value={tripDateDraft}
+                          onChange={(event) => setTripDateDraft(event.target.value)}
+                          className="min-h-11 rounded-[16px] border border-[rgba(82,231,255,0.48)] bg-white/78 px-3 text-center font-mono text-[12px] font-black tracking-[0.08em] text-(--guto-navy) outline-none"
+                        />
+                      </label>
+                    ) : null}
                   </>
                 ) : (
                   <p className="text-sm font-black text-(--guto-navy)">
@@ -1796,29 +1910,54 @@ export function ChatTab({
                   </p>
                 )}
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void resolveProactiveConfirmation(memory.id, memory.type === "trip" ? "adapted" : "confirm")}
-                    className="min-h-11 rounded-full border border-(--guto-cyan) bg-[rgba(82,231,255,0.2)] px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.22)]"
-                  >
-                    {proactiveUi.btnYes}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void resolveProactiveConfirmation(memory.id, memory.type === "trip" ? "protected" : "discard")}
-                    className="min-h-11 rounded-full border border-[rgba(13,35,65,0.18)] bg-white/72 px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy)"
-                  >
-                    {proactiveUi.btnNo}
-                  </button>
-                  {memory.type === "trip" ? (
-                    <button
-                      type="button"
-                      onClick={() => void resolveProactiveConfirmation(memory.id, "change-date")}
-                      className="col-span-2 min-h-11 rounded-full border border-[rgba(82,231,255,0.48)] bg-white/62 px-3 py-2 font-mono text-[10px] font-black tracking-[0.12em] text-[rgba(13,35,65,0.7)]"
-                    >
-                      {proactiveUi.btnFix}
-                    </button>
-                  ) : null}
+                  {memory.type === "trip" && editingTripMemoryId === memory.id ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void saveTripDateEdit(memory)}
+                        disabled={!tripDateDraft.trim()}
+                        className="min-h-11 rounded-full border border-(--guto-cyan) bg-[rgba(82,231,255,0.2)] px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.22)] disabled:opacity-40"
+                      >
+                        {proactiveUi.btnSaveDate}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingTripMemoryId(null)
+                          setTripDateDraft("")
+                        }}
+                        className="min-h-11 rounded-full border border-[rgba(13,35,65,0.18)] bg-white/72 px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy)"
+                      >
+                        {proactiveUi.btnKeepDate}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void resolveProactiveConfirmation(memory, "confirm")}
+                        className="min-h-11 rounded-full border border-(--guto-cyan) bg-[rgba(82,231,255,0.2)] px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.22)]"
+                      >
+                        {proactiveUi.btnConfirm}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void resolveProactiveConfirmation(memory, "discard")}
+                        className="min-h-11 rounded-full border border-[rgba(13,35,65,0.18)] bg-white/72 px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy)"
+                      >
+                        {proactiveUi.btnCancel}
+                      </button>
+                      {memory.type === "trip" ? (
+                        <button
+                          type="button"
+                          onClick={() => startTripDateEdit(memory)}
+                          className="col-span-2 min-h-11 rounded-full border border-[rgba(82,231,255,0.48)] bg-white/62 px-3 py-2 font-mono text-[10px] font-black tracking-[0.12em] text-[rgba(13,35,65,0.7)]"
+                        >
+                          {proactiveUi.btnFix}
+                        </button>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </div>
             ))}
@@ -1842,7 +1981,7 @@ export function ChatTab({
         </motion.div>
       )}
 
-      {quickReplyOptions.length > 0 && activeExpectedResponse && (
+      {quickReplyOptions.length > 0 && activeExpectedResponse && !hasBlockingProactiveCard && (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
@@ -1854,7 +1993,7 @@ export function ChatTab({
               key={option}
               type="button"
               onClick={() => void handleQuickReply(option, activeExpectedResponse)}
-              disabled={isSending}
+              disabled={isSending || hasBlockingProactiveCard}
               className="min-h-11 flex-1 rounded-full border border-[rgba(82,231,255,0.62)] bg-[rgba(82,231,255,0.16)] px-4 py-2 font-mono text-[11px] font-black uppercase tracking-[0.16em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.18)] disabled:opacity-45"
             >
               {option}
@@ -1891,6 +2030,14 @@ export function ChatTab({
       )}
 
       <div className="w-full">
+        {hasBlockingProactiveCard ? (
+          <div
+            data-testid="guto-chat-card-block"
+            className="grid min-h-[58px] place-items-center rounded-[18px] border border-[rgba(82,231,255,0.48)] bg-white/86 px-4 py-3 text-center font-mono text-[10px] font-black uppercase tracking-[0.14em] text-(--guto-navy) shadow-[0_8px_24px_rgba(82,231,255,0.14)]"
+          >
+            {copy.cardBlockPrompt}
+          </div>
+        ) : (
         <div className="guto-chat-input h-[58px] rounded-[18px] px-3 py-2">
           <div className="flex h-[42px] items-center gap-3">
             <motion.button
@@ -1901,7 +2048,7 @@ export function ChatTab({
               }}
               onPointerUp={stopRecording}
               onPointerLeave={() => isRecording && stopRecording()}
-              disabled={isSending}
+              disabled={isSending || hasBlockingProactiveCard}
               className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full text-(--guto-cyan)"
               animate={isRecording ? { scale: [1, 1.08, 1] } : { scale: 1 }}
               transition={{ duration: 0.8, repeat: isRecording ? Infinity : 0 }}
@@ -1930,7 +2077,7 @@ export function ChatTab({
                 gutoAudio.playGutoFeedback("tap")
                 void handleSend()
               }}
-              disabled={isSending || !input.trim()}
+              disabled={isSending || hasBlockingProactiveCard || !input.trim()}
               className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full text-(--guto-cyan) disabled:opacity-35"
               whileTap={{ scale: isSending ? 1 : 0.94 }}
               aria-label="Enviar mensagem"
@@ -1939,6 +2086,7 @@ export function ChatTab({
             </motion.button>
           </div>
         </div>
+        )}
 
         {isSpeaking && !isMuted && (
           <div className="mt-1 text-center font-mono text-[9px] uppercase tracking-normal text-(--guto-cyan)">

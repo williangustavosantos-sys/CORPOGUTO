@@ -39,10 +39,10 @@ describe("guto proactivity UI", () => {
     const copy = getProactiveMemoryUiCopy("pt-BR")
 
     assert.equal(copy.tripTitle, "Viagem")
-    assert.equal(copy.tripQuestion, "Treino adaptado na viagem?")
-    assert.equal(copy.btnYes, "SIM")
+    assert.equal(copy.tripQuestion("19/06/2026", false), "Confirmar viagem em 19/06/2026 sem treino adaptado?")
+    assert.equal(copy.btnConfirm, "CONFIRMAR")
     assert.equal(copy.btnFix, "ALTERAR DATA")
-    assert.equal(copy.btnNo, "NÃO")
+    assert.equal(copy.btnCancel, "CANCELAR")
     assert.equal(formatProactiveMemoryLabel(tripMemory()), "Viagem provável em 2026-06-19 (19/06/2026)")
   })
 

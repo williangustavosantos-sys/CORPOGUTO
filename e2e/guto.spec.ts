@@ -944,8 +944,8 @@ test.describe('GUTO – Fluxos críticos', () => {
     await expect(page.getByRole('button', { name: 'SIM' })).toBeVisible({ timeout: 10000 })
     await page.getByRole('button', { name: 'SIM' }).click()
     await expect(page.getByText('Viagem', { exact: true })).toBeVisible({ timeout: 10000 })
-    await expect(page.getByText(travelDateLabel)).toBeVisible()
-    const tripCardQuestion = page.getByText('Treino adaptado na viagem?')
+    await expect(page.getByText(travelDateLabel, { exact: true })).toBeVisible()
+    const tripCardQuestion = page.getByText(`Confirmar viagem em ${travelDateLabel} com treino adaptado?`)
     await expect(tripCardQuestion).toBeVisible()
     await expect(page.getByRole('button', { name: 'ALTERAR DATA' })).toBeVisible()
 
@@ -954,9 +954,9 @@ test.describe('GUTO – Fluxos críticos', () => {
 
     await page.reload()
     await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
-    await expect(page.getByText('Treino adaptado na viagem?')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(`Confirmar viagem em ${travelDateLabel} com treino adaptado?`)).toBeVisible({ timeout: 10000 })
 
-    await page.getByRole('button', { name: 'SIM' }).click()
+    await page.getByRole('button', { name: 'CONFIRMAR' }).click()
     await expect(page.getByText('Fechado. Salvei tua viagem. Agora vamos cuidar de hoje.')).toBeVisible({ timeout: 10000 })
 
     await expect.poll(() => seenInputs.length).toBeGreaterThanOrEqual(2)

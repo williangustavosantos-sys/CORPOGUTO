@@ -59,6 +59,7 @@ const AUDIO_STORE = "audio"
 // caíam no fallback do navegador — mudo no celular. 600 cobre praticamente
 // toda fala do GUTO com a voz real do servidor, deixando o áudio consistente.
 const MAX_REMOTE_TEXT_LENGTH = 600
+const CANONICAL_REMOTE_VOICE_ID = "Charon"
 
 function isBrowser() {
   return typeof window !== "undefined"
@@ -258,6 +259,10 @@ class GutoVoiceService {
       const cacheKey = await this.cacheKey({ text, language })
       const cached = await getCachedAudio(cacheKey)
       if (cached) {
+        if (cached.voiceId !== CANONICAL_REMOTE_VOICE_ID) {
+          // Cache antigo com outra voz quebra identidade vocal. Ignora e gera
+          // novamente com a voz canônica do backend.
+        } else {
         if (isStale()) return supersededResult
         await touchCachedAudio(cached)
         await this.playBlob(cached.blob)
@@ -268,6 +273,7 @@ class GutoVoiceService {
           voiceId: cached.voiceId,
           voiceVersion: cached.voiceVersion,
           contentType: cached.contentType,
+        }
         }
       }
 
@@ -351,7 +357,8 @@ class GutoVoiceService {
       if (!response.ok || !data?.audioContent) return null
 
       const contentType = typeof data.mimeType === "string" ? data.mimeType : "audio/mpeg"
-      const voiceUsed = typeof data.voiceUsed === "string" && data.voiceUsed.trim() ? data.voiceUsed : getVoiceId()
+      const voiceUsed = typeof data.voiceUsed === "string" && data.voiceUsed.trim() ? data.voiceUsed : CANONICAL_REMOTE_VOICE_ID
+      if (voiceUsed !== CANONICAL_REMOTE_VOICE_ID) return null
       const record: GutoVoiceBankRecord = {
         key: cacheKey,
         textHash: await sha1(normalizeTextForHash(text)),

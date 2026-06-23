@@ -10,10 +10,12 @@ export type ProactiveMemoryUiCopy = {
   hintTripImpact: string
   hintValidate: string
   tripTitle: string
-  tripQuestion: string
-  btnYes: string
-  btnNo: string
+  tripQuestion: (dateLabel: string, trainingAdapted?: boolean) => string
+  btnConfirm: string
+  btnCancel: string
   btnFix: string
+  btnSaveDate: string
+  btnKeepDate: string
 }
 
 const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
@@ -22,45 +24,66 @@ const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
     pendingTrip: "VIAGEM",
     pendingTripImpact: "VIAGEM",
     pendingValidate: (label) => `Validar: ${label}`,
-    hintConfirm: "Confirma aqui, altera a data no chat ou fecha se não for isso.",
+    hintConfirm: "Confirma aqui, altera a data no card ou cancela se não for isso.",
     hintTripEvent: "Confirmar = a viagem existe. Fechar = descartar. Alterar data = corrigir antes de salvar.",
     hintTripImpact: "",
     hintValidate: "O GUTO quer saber o que aconteceu com este compromisso da semana passada.",
     tripTitle: "Viagem",
-    tripQuestion: "Treino adaptado na viagem?",
-    btnYes: "SIM",
-    btnNo: "NÃO",
+    tripQuestion: (dateLabel, trainingAdapted) =>
+      trainingAdapted === true
+        ? `Confirmar viagem em ${dateLabel} com treino adaptado?`
+        : trainingAdapted === false
+          ? `Confirmar viagem em ${dateLabel} sem treino adaptado?`
+          : `Confirmar viagem em ${dateLabel}?`,
+    btnConfirm: "CONFIRMAR",
+    btnCancel: "CANCELAR",
     btnFix: "ALTERAR DATA",
+    btnSaveDate: "SALVAR DATA",
+    btnKeepDate: "VOLTAR",
   },
   "en-US": {
     pendingConfirm: (label) => `Confirm: ${label}`,
     pendingTrip: "TRAVEL",
     pendingTripImpact: "TRAVEL",
     pendingValidate: (label) => `Validate: ${label}`,
-    hintConfirm: "Confirm here, change the date in chat, or close it if this is wrong.",
+    hintConfirm: "Confirm here, change the date in the card, or cancel it if this is wrong.",
     hintTripEvent: "Confirm = the trip exists. Close = discard it. Change date = correct it before saving.",
     hintTripImpact: "",
     hintValidate: "GUTO needs to know what happened with this commitment from last week.",
     tripTitle: "Travel",
-    tripQuestion: "Adapted workout during the trip?",
-    btnYes: "YES",
-    btnNo: "NO",
+    tripQuestion: (dateLabel, trainingAdapted) =>
+      trainingAdapted === true
+        ? `Confirm travel on ${dateLabel} with an adapted workout?`
+        : trainingAdapted === false
+          ? `Confirm travel on ${dateLabel} with no adapted workout?`
+          : `Confirm travel on ${dateLabel}?`,
+    btnConfirm: "CONFIRM",
+    btnCancel: "CANCEL",
     btnFix: "CHANGE DATE",
+    btnSaveDate: "SAVE DATE",
+    btnKeepDate: "BACK",
   },
   "it-IT": {
     pendingConfirm: (label) => `Conferma: ${label}`,
     pendingTrip: "VIAGGIO",
     pendingTripImpact: "VIAGGIO",
     pendingValidate: (label) => `Valida: ${label}`,
-    hintConfirm: "Conferma qui, cambia la data in chat o chiudi se non è corretto.",
+    hintConfirm: "Conferma qui, cambia la data nella card o annulla se non è corretto.",
     hintTripEvent: "Conferma = il viaggio esiste. Chiudi = scartarlo. Cambia data = correggere prima di salvare.",
     hintTripImpact: "",
     hintValidate: "GUTO vuole sapere cosa è successo con questo impegno della settimana scorsa.",
     tripTitle: "Viaggio",
-    tripQuestion: "Allenamento adattato durante il viaggio?",
-    btnYes: "SÌ",
-    btnNo: "NO",
+    tripQuestion: (dateLabel, trainingAdapted) =>
+      trainingAdapted === true
+        ? `Confermare viaggio il ${dateLabel} con allenamento adattato?`
+        : trainingAdapted === false
+          ? `Confermare viaggio il ${dateLabel} senza allenamento adattato?`
+          : `Confermare viaggio il ${dateLabel}?`,
+    btnConfirm: "CONFERMA",
+    btnCancel: "ANNULLA",
     btnFix: "CAMBIA DATA",
+    btnSaveDate: "SALVA DATA",
+    btnKeepDate: "INDIETRO",
   },
 }
 

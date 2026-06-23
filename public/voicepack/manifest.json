@@ -1,7 +1,7 @@
 {
   "version": 2,
   "voiceId": "backend-voz-google-chat",
-  "voiceVersion": "backend-voz-chirp3-charon-v1",
+  "voiceVersion": "backend-voz-charon-v2",
   "languages": {
     "pt-BR": {
       "intents": {}
