@@ -118,7 +118,35 @@ export interface GutoExpectedResponse {
   type: "text"
   options?: string[]
   instruction?: string
-  context?: "training_schedule" | "training_location" | "training_status" | "training_limitations" | "limitation_check"
+  context?:
+    | "training_schedule"
+    | "training_location"
+    | "training_status"
+    | "training_limitations"
+    | "limitation_check"
+    | "exercise_swap"
+    | "travel_training"
+}
+
+export type ProactivePromptKind =
+  | "weekly_opening"
+  | "travel_training"
+  | "memory_reminder"
+  | "memory_validation"
+
+export interface ProactivePrompt {
+  id: string
+  kind: ProactivePromptKind
+  status: "active" | "resolved"
+  fala: string
+  expectedResponse?: GutoExpectedResponse | null
+  relatedMemoryId?: string
+  weekKey?: string
+  dayKey?: string
+  createdAt: string
+  updatedAt: string
+  surfacedAt?: string
+  answeredAt?: string
 }
 
 export interface SendGutoMessageRequest {
@@ -136,9 +164,45 @@ export interface SendGutoMessageRequest {
     parts: { text: string }[]
   }[]
   expectedResponse?: GutoExpectedResponse | null
+  turnId: string
+}
+
+export type ProactiveMemoryStage =
+  | "event_confirmation"
+  | "continuity_question"
+  | "impact_confirmation"
+  | "confirmed_adapted"
+  | "confirmed_protected"
+  | "discarded"
+
+export interface GutoAtomicTurnDecision {
+  turnId: string
+  userMessage: string
+  previousState: {
+    activeContext: GutoMemory["activeConversationContext"]
+    relatedMemoryId?: string
+    stage: ProactiveMemoryStage | "none"
+  }
+  activeContext: GutoMemory["activeConversationContext"]
+  intent: string
+  relatedMemoryId?: string
+  stage: ProactiveMemoryStage | "none"
+  nextState: {
+    activeContext: GutoMemory["activeConversationContext"]
+    relatedMemoryId?: string
+    stage: ProactiveMemoryStage | "none"
+  }
+  effects: string[]
+  response: Pick<SendGutoMessageResponse, "fala" | "acao" | "expectedResponse" | "avatarEmotion">
+  cards: Array<{ memoryId: string; stage: "impact_confirmation"; dateParsed?: string }>
+  memoryPatch: Partial<GutoMemory>
+  workoutEffect: string
+  dietEffect: string
+  pathEffect: string
 }
 
 export interface SendGutoMessageResponse {
+  turnId?: string
   fala?: string
   acao?: "none" | "updateWorkout" | "lock" | "changeLanguage" | "requestDeleteAccount" | "showProfile"
   expectedResponse?: GutoExpectedResponse | null
@@ -146,6 +210,7 @@ export interface SendGutoMessageResponse {
   workoutPlan?: GutoWorkoutPlan | null
   memoryPatch?: Partial<GutoMemory>
   proactiveMemoryAction?: GutoProactiveMemoryAction | null
+  turnDecision?: GutoAtomicTurnDecision
 }
 
 export interface GutoNameValidation {
@@ -200,6 +265,15 @@ export interface GutoMemory {
   lastWorkoutPlan?: GutoWorkoutPlan | null
   proactiveMemories?: ProactiveMemory[]
   proactiveImpacts?: ProactiveImpact[]
+  proactivePrompt?: ProactivePrompt | null
+  activeConversationContext?: {
+    kind: "travel_confirmation" | "travel_impact_confirmation" | "workout_substitution" | "diet_substitution" | "pain_safety" | "weekly_checkin" | "none"
+    source: "proactive_memory" | "proactive_prompt" | "substitution_context" | "safety" | "weekly_conversation" | "none"
+    relatedMemoryId?: string
+    originalId?: string
+    dateParsed?: string
+    updatedAt: string
+  } | null
   dietGenerationStatus?: "idle" | "ready_to_generate" | "generating" | "generated" | "needs_clarification" | "failed"
   weeklyWorkoutPlan?: {
     studentId: string
@@ -260,6 +334,7 @@ export interface GutoProactiveResponse {
   expectedResponse?: GutoExpectedResponse | null
   avatarEmotion?: GutoAvatarEmotion
   workoutPlan?: GutoWorkoutPlan | null
+  memoryPatch?: Partial<GutoMemory>
 }
 
 // ─── Diet types ───────────────────────────────────────────────────────────────
@@ -637,6 +712,10 @@ export interface ProactiveMemory {
   userId: string
   type: "trip" | "commitment" | "schedule" | "health" | "other"
   status: ProactiveMemoryStatus
+  eventKey?: string
+  stage?: ProactiveMemoryStage
+  sourceTurnId?: string
+  confirmationStage?: "event" | "impact"
   rawText: string
   understood: string
   dateText?: string

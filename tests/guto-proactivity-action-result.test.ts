@@ -5,6 +5,8 @@ import {
   getProactivityActionMemoryPatch,
   type ProactivityActionMessage,
 } from "../lib/guto-proactivity-action-result"
+import { formatProactiveMemoryLabel, getActionableProactiveMemories } from "../lib/guto-proactivity-ui"
+import type { ProactiveMemory } from "../lib/api/guto"
 
 type TestMessage = ProactivityActionMessage & { id: string }
 
@@ -49,5 +51,43 @@ describe("proactivity action result UI", () => {
 
     assert.equal(next, previous)
     assert.equal(next.length, 1)
+  })
+
+  it("formata card de memória com data absoluta quando dateParsed existe", () => {
+    const memory: ProactiveMemory = {
+      id: "pm-1",
+      userId: "user-1",
+      type: "trip",
+      status: "pending_confirmation",
+      rawText: "eu viajo amanhã",
+      understood: "Viagem amanhã",
+      dateText: "amanhã",
+      dateParsed: "2026-06-19",
+      weekKey: "2026-W25",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      updatedAt: "2026-06-18T12:00:00.000Z",
+    }
+
+    assert.equal(formatProactiveMemoryLabel(memory), "Viagem amanhã (19/06)")
+  })
+
+  it("mostra um card somente no estágio de confirmação do impacto", () => {
+    const base: ProactiveMemory = {
+      id: "pm-stage",
+      userId: "user-1",
+      type: "trip",
+      status: "pending_confirmation",
+      rawText: "viajo terça",
+      understood: "Viagem terça",
+      dateParsed: "2026-06-23",
+      weekKey: "2026-W26",
+      createdAt: "2026-06-21T12:00:00.000Z",
+      updatedAt: "2026-06-21T12:00:00.000Z",
+    }
+    const continuity = getActionableProactiveMemories([{ ...base, stage: "continuity_question" }])
+    const impact = getActionableProactiveMemories([{ ...base, stage: "impact_confirmation" }])
+
+    assert.equal(continuity.pendingConfirmation.length, 0)
+    assert.equal(impact.pendingConfirmation.length, 1)
   })
 })

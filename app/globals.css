@@ -1137,9 +1137,28 @@ body.guto-online-active .guto-settings-trigger-shell {
   --guto-chat-header-top: max(env(safe-area-inset-top), 1.03%);
   --guto-chat-header-height: clamp(54px, 9.27%, 72px);
   --guto-chat-avatar-top: clamp(148px, 21.5%, 182px);
+  --guto-chat-presence-top: calc(var(--guto-chat-header-top) + var(--guto-chat-header-height) + 8px);
   display: flex;
   min-height: 0;
   flex-direction: column;
+}
+
+.guto-chat-presence {
+  left: clamp(20px, 7%, 44px);
+  right: clamp(20px, 7%, 44px);
+  top: var(--guto-chat-presence-top);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.guto-chat-presence-avatar {
+  background:
+    radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.95), rgba(82, 231, 255, 0.12) 58%, transparent 84%),
+    rgba(255, 255, 255, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 0 18px rgba(82, 231, 255, 0.18);
 }
 
 .guto-chat-avatar-stage {
@@ -1167,8 +1186,8 @@ body.guto-online-active .guto-settings-trigger-shell {
 }
 
 .guto-chat-sound-toggle {
-  right: clamp(34px, 12.2%, 64px);
-  top: calc(var(--guto-chat-avatar-top) + clamp(4px, 2.4dvh, 18px));
+  right: calc(clamp(22px, 8%, 44px) + 52px);
+  top: calc(var(--guto-chat-header-top) + 10px);
 }
 
 .sala-guto[data-keyboard-open] .guto-chat-stage {
@@ -1182,6 +1201,12 @@ body.guto-online-active .guto-settings-trigger-shell {
   pointer-events: none;
   transform: translateY(-18px) scale(0.72);
   transform-origin: center top;
+}
+
+.sala-guto[data-keyboard-open] .guto-chat-presence {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-10px) scale(0.96);
 }
 
 .sala-guto[data-keyboard-open] .guto-chat-bubble {
@@ -1200,11 +1225,8 @@ body.guto-online-active .guto-settings-trigger-shell {
   z-index: 50;
 }
 
-/* Lista de mensagens precisa abrir espaço quando teclado abre.
-   Sem isto, top:54% (calculado contra o viewport encolhido) deixa
-   só um filete espremido entre o avatar e o input.
-   Usamos !important porque o utility do Tailwind (top-[54%]) é gerado
-   como classe simples e ganha por especificidade igual + ordem do bundle. */
+/* Lista de mensagens precisa abrir espaço quando teclado abre. O visualViewport
+   encolhe no iOS/Android, então a conversa deve assumir quase toda a cápsula. */
 .sala-guto[data-keyboard-open] .guto-chat-list {
   top: clamp(56px, 12%, 96px) !important;
   bottom: calc(max(env(safe-area-inset-bottom), 8px) + 78px) !important;
