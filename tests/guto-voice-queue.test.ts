@@ -109,4 +109,13 @@ describe("chat voice identity", () => {
     assert.doesNotMatch(source, /speechSynthesis\.speak/)
     assert.match(source, /mode:\s*"silent"/)
   })
+
+  it("descarta cache de voz que não seja a voz canônica Charon", () => {
+    const source = readFileSync(join(process.cwd(), "lib/guto-voice/guto-voice-service.ts"), "utf8")
+    const manifest = readFileSync(join(process.cwd(), "public/voicepack/manifest.json"), "utf8")
+    assert.match(source, /CANONICAL_REMOTE_VOICE_ID\s*=\s*"Charon"/)
+    assert.match(source, /cached\.voiceId\s*!==\s*CANONICAL_REMOTE_VOICE_ID/)
+    assert.match(source, /voiceUsed\s*!==\s*CANONICAL_REMOTE_VOICE_ID/)
+    assert.match(manifest, /backend-voz-charon-v2/)
+  })
 })

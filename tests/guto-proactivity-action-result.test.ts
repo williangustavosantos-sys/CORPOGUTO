@@ -5,7 +5,7 @@ import {
   getProactivityActionMemoryPatch,
   type ProactivityActionMessage,
 } from "../lib/guto-proactivity-action-result"
-import { formatProactiveMemoryLabel, getActionableProactiveMemories } from "../lib/guto-proactivity-ui"
+import { formatProactiveMemoryLabel, getActionableProactiveMemories, getProactiveMemoryUiCopy } from "../lib/guto-proactivity-ui"
 import type { ProactiveMemory } from "../lib/api/guto"
 
 type TestMessage = ProactivityActionMessage & { id: string }
@@ -89,5 +89,20 @@ describe("proactivity action result UI", () => {
 
     assert.equal(continuity.pendingConfirmation.length, 0)
     assert.equal(impact.pendingConfirmation.length, 1)
+  })
+
+  it("card de viagem valida a decisão já coletada e não pergunta de novo", () => {
+    const copy = getProactiveMemoryUiCopy("pt-BR")
+
+    assert.equal(
+      copy.tripQuestion("25/06/2026", false),
+      "Confirmar viagem em 25/06/2026 sem treino adaptado?",
+    )
+    assert.equal(
+      copy.tripQuestion("25/06/2026", true),
+      "Confirmar viagem em 25/06/2026 com treino adaptado?",
+    )
+    assert.equal(copy.btnConfirm, "CONFIRMAR")
+    assert.equal(copy.btnCancel, "CANCELAR")
   })
 })

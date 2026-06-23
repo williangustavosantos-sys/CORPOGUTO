@@ -19,9 +19,9 @@ import {
 
 import { API_URL } from "@/lib/api/client"
 import {
-  changeProactiveMemoryDate,
   confirmProactiveMemory,
   discardProactiveMemory,
+  updateProactiveMemory,
 } from "@/lib/api/guto"
 import type { GutoMemory, GutoWorkoutPlan, WorkoutValidationRecord } from "@/lib/api/guto"
 import {
@@ -61,6 +61,8 @@ const pathCopy = {
     validated: "Últimos treinos validados",
     alter: "ALTERAR",
     changeDate: "DATA",
+    saveDate: "SALVAR",
+    back: "VOLTAR",
     adaptedYes: "TREINO SIM",
     adaptedNo: "TREINO NÃO",
     cancelTrip: "CANCELAR",
@@ -89,6 +91,8 @@ const pathCopy = {
     validated: "Last validated workouts",
     alter: "CHANGE",
     changeDate: "DATE",
+    saveDate: "SAVE",
+    back: "BACK",
     adaptedYes: "WORKOUT YES",
     adaptedNo: "WORKOUT NO",
     cancelTrip: "CANCEL",
@@ -117,6 +121,8 @@ const pathCopy = {
     validated: "Ultimi allenamenti validati",
     alter: "MODIFICA",
     changeDate: "DATA",
+    saveDate: "SALVA",
+    back: "INDIETRO",
     adaptedYes: "ALLENAMENTO SÌ",
     adaptedNo: "ALLENAMENTO NO",
     cancelTrip: "ANNULLA",
@@ -181,13 +187,15 @@ function eventColor(kind: GutoPathEvent["kind"]) {
   return "text-(--guto-cyan)"
 }
 
-export function PathTab({ language, memory, workoutPlan, validationHistory, onMemoryPatch, onOpenChat }: PathTabProps) {
+export function PathTab({ language, memory, workoutPlan, validationHistory, onMemoryPatch }: PathTabProps) {
   const validLang = getLanguage(language)
   const locale = translations[validLang]
   const copy = pathCopy[validLang]
   const [selectedPoster, setSelectedPoster] = useState<string | null>(null)
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null)
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null)
+  const [editingDateMemoryId, setEditingDateMemoryId] = useState<string | null>(null)
+  const [dateDraft, setDateDraft] = useState("")
   const [updatingMemoryId, setUpdatingMemoryId] = useState<string | null>(null)
   const pathMonth = useMemo(
     () =>
@@ -214,12 +222,10 @@ export function PathTab({ language, memory, workoutPlan, validationHistory, onMe
 
   const runTripAction = async (
     memoryId: string,
-    action: "date" | "adapted" | "protected" | "cancel"
+    action: "adapted" | "protected" | "cancel"
   ) => {
     setUpdatingMemoryId(memoryId)
-    const result = action === "date"
-      ? await changeProactiveMemoryDate(memoryId)
-      : action === "adapted"
+    const result = action === "adapted"
         ? await confirmProactiveMemory(memoryId, true)
         : action === "protected"
           ? await confirmProactiveMemory(memoryId, false)
@@ -227,7 +233,19 @@ export function PathTab({ language, memory, workoutPlan, validationHistory, onMe
     if (result.memoryPatch) onMemoryPatch?.(result.memoryPatch)
     setUpdatingMemoryId(null)
     setEditingMemoryId(null)
-    if (action === "date" && result.ok) onOpenChat?.()
+    setEditingDateMemoryId(null)
+    setDateDraft("")
+  }
+
+  const saveTripDate = async (memoryId: string) => {
+    if (!dateDraft.trim()) return
+    setUpdatingMemoryId(memoryId)
+    const date = dateDraft.trim()
+    const result = await updateProactiveMemory(memoryId, { dateParsed: date, dateText: date })
+    if (result.memoryPatch) onMemoryPatch?.(result.memoryPatch)
+    setUpdatingMemoryId(null)
+    setEditingDateMemoryId(null)
+    setDateDraft("")
   }
 
   return (
@@ -356,7 +374,20 @@ export function PathTab({ language, memory, workoutPlan, validationHistory, onMe
                         </button>
                         {editingMemoryId === event.memoryId ? (
                           <div className="mt-2 grid grid-cols-2 gap-2">
-                            <button type="button" disabled={updatingMemoryId === event.memoryId} onClick={() => void runTripAction(event.memoryId!, "date")} className="min-h-11 rounded-full border border-white/70 bg-white/70 px-2 font-mono text-[8px] font-black tracking-[0.08em] text-(--guto-navy) disabled:opacity-45">{copy.changeDate}</button>
+                            {editingDateMemoryId === event.memoryId ? (
+                              <>
+                                <input
+                                  type="date"
+                                  value={dateDraft}
+                                  onChange={(inputEvent) => setDateDraft(inputEvent.target.value)}
+                                  className="col-span-2 min-h-11 rounded-[14px] border border-[rgba(82,231,255,0.42)] bg-white/76 px-3 text-center font-mono text-[10px] font-black tracking-[0.08em] text-(--guto-navy) outline-none"
+                                />
+                                <button type="button" disabled={updatingMemoryId === event.memoryId || !dateDraft.trim()} onClick={() => void saveTripDate(event.memoryId!)} className="min-h-11 rounded-full border border-(--guto-cyan) bg-[rgba(82,231,255,0.18)] px-2 font-mono text-[8px] font-black tracking-[0.08em] text-(--guto-navy) disabled:opacity-45">{copy.saveDate}</button>
+                                <button type="button" disabled={updatingMemoryId === event.memoryId} onClick={() => { setEditingDateMemoryId(null); setDateDraft("") }} className="min-h-11 rounded-full border border-white/70 bg-white/70 px-2 font-mono text-[8px] font-black tracking-[0.08em] text-(--guto-navy) disabled:opacity-45">{copy.back}</button>
+                              </>
+                            ) : (
+                              <button type="button" disabled={updatingMemoryId === event.memoryId} onClick={() => { setEditingDateMemoryId(event.memoryId!); setDateDraft(selectedDay.dateKey) }} className="min-h-11 rounded-full border border-white/70 bg-white/70 px-2 font-mono text-[8px] font-black tracking-[0.08em] text-(--guto-navy) disabled:opacity-45">{copy.changeDate}</button>
+                            )}
                             <button type="button" disabled={updatingMemoryId === event.memoryId} onClick={() => void runTripAction(event.memoryId!, "adapted")} className="min-h-11 rounded-full border border-white/70 bg-white/70 px-2 font-mono text-[8px] font-black tracking-[0.08em] text-(--guto-navy) disabled:opacity-45">{copy.adaptedYes}</button>
                             <button type="button" disabled={updatingMemoryId === event.memoryId} onClick={() => void runTripAction(event.memoryId!, "protected")} className="min-h-11 rounded-full border border-white/70 bg-white/70 px-2 font-mono text-[8px] font-black tracking-[0.08em] text-(--guto-navy) disabled:opacity-45">{copy.adaptedNo}</button>
                             <button type="button" disabled={updatingMemoryId === event.memoryId} onClick={() => void runTripAction(event.memoryId!, "cancel")} className="min-h-11 rounded-full border border-[rgba(167,70,70,0.24)] bg-white/70 px-2 font-mono text-[8px] font-black tracking-[0.08em] text-[rgba(167,70,70,0.82)] disabled:opacity-45">{copy.cancelTrip}</button>
