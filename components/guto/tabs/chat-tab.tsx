@@ -813,6 +813,26 @@ export function ChatTab({
     [applyProactiveActionResult, refreshProactiveMemories]
   )
 
+  // Card de cancelamento: "Manter viagem" desfaz o pedido de cancelamento e
+  // mantém a viagem ativa (cancel_discard_request). Determinístico, libera o chat.
+  const keepProactiveTrip = useCallback(
+    async (memory: ProactiveMemory) => {
+      gutoAudio.playGutoFeedback("tap")
+      const memoryId = memory.id
+      setProactiveMemories((prev) =>
+        prev.map((item) => (item.id === memoryId ? { ...item, discardRequestedAt: undefined } : item))
+      )
+      try {
+        const result = await cancelDiscardRequest(memoryId)
+        applyProactiveActionResult(result)
+      } catch {
+        // refresh abaixo reconcilia estado real
+      }
+      await refreshProactiveMemories()
+    },
+    [applyProactiveActionResult, refreshProactiveMemories]
+  )
+
   const startTripDateEdit = useCallback((memory: ProactiveMemory) => {
     gutoAudio.playGutoFeedback("tap")
     setEditingTripMemoryId(memory.id)
@@ -1643,7 +1663,8 @@ export function ChatTab({
   )
   const showProactiveBanner =
     !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories, memory?.activeConversationContext || null)
-  const hasBlockingProactiveCard = showProactiveBanner && actionableProactive.pendingConfirmation.length > 0
+  const hasBlockingProactiveCard = showProactiveBanner &&
+    (actionableProactive.pendingConfirmation.length > 0 || actionableProactive.awaitingDiscard.length > 0)
   useEffect(() => {
     blockingProactiveCardRef.current = hasBlockingProactiveCard
   }, [hasBlockingProactiveCard])
@@ -1962,12 +1983,80 @@ export function ChatTab({
               </div>
             ))}
             {actionableProactive.awaitingDiscard.map((memory) => (
-              <span
-                key={memory.id}
-                className="rounded-full border border-[rgba(255,120,80,0.45)] bg-[rgba(255,235,228,0.92)] px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-[0.06em] text-(--guto-navy)"
-              >
-                {proactiveUi.pendingConfirm(formatProactiveMemoryLabel(memory))}
-              </span>
+              <div key={memory.id} className="flex w-full flex-col">
+                <div className="flex items-center gap-2 text-[rgba(255,120,80,0.95)]">
+                  <Plane className="h-4 w-4" aria-hidden="true" />
+                  <p className="text-sm font-black tracking-[0.04em] text-(--guto-navy)">{proactiveUi.tripTitle}</p>
+                </div>
+                <p className="mt-3 text-[15px] font-black leading-tight text-(--guto-navy)">
+                  {formatProactiveWeekday(memory, validLang as SupportedLanguage)}
+                </p>
+                <p className="mt-0.5 font-mono text-[11px] font-bold tracking-[0.08em] text-[rgba(13,35,65,0.56)]">
+                  {formatProactiveDate(memory, validLang as SupportedLanguage)}
+                </p>
+                <p className="mt-3 text-[13px] font-bold text-(--guto-navy)">
+                  {proactiveUi.cancelTripQuestion(formatProactiveDate(memory, validLang as SupportedLanguage))}
+                </p>
+                {editingTripMemoryId === memory.id ? (
+                  <label className="mt-3 flex flex-col gap-1.5 text-left font-mono text-[9px] font-black uppercase tracking-[0.12em] text-[rgba(13,35,65,0.55)]">
+                    {copy.dateInputLabel}
+                    <input
+                      type="date"
+                      value={tripDateDraft}
+                      onChange={(event) => setTripDateDraft(event.target.value)}
+                      className="min-h-11 rounded-[16px] border border-[rgba(82,231,255,0.48)] bg-white/78 px-3 text-center font-mono text-[12px] font-black tracking-[0.08em] text-(--guto-navy) outline-none"
+                    />
+                  </label>
+                ) : null}
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {editingTripMemoryId === memory.id ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void saveTripDateEdit(memory)}
+                        disabled={!tripDateDraft.trim()}
+                        className="min-h-11 rounded-full border border-(--guto-cyan) bg-[rgba(82,231,255,0.2)] px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.22)] disabled:opacity-40"
+                      >
+                        {proactiveUi.btnSaveDate}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingTripMemoryId(null)
+                          setTripDateDraft("")
+                        }}
+                        className="min-h-11 rounded-full border border-[rgba(13,35,65,0.18)] bg-white/72 px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy)"
+                      >
+                        {proactiveUi.btnKeepDate}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void resolveProactiveConfirmation(memory, "discard")}
+                        className="min-h-11 rounded-full border border-[rgba(255,120,80,0.85)] bg-[rgba(255,120,80,0.16)] px-3 py-2 font-mono text-[10px] font-black tracking-[0.12em] text-(--guto-navy) shadow-[0_0_14px_rgba(255,120,80,0.18)]"
+                      >
+                        {proactiveUi.btnConfirmCancel}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void keepProactiveTrip(memory)}
+                        className="min-h-11 rounded-full border border-[rgba(13,35,65,0.18)] bg-white/72 px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy)"
+                      >
+                        {proactiveUi.btnKeepTrip}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startTripDateEdit(memory)}
+                        className="col-span-2 min-h-11 rounded-full border border-[rgba(82,231,255,0.48)] bg-white/62 px-3 py-2 font-mono text-[10px] font-black tracking-[0.12em] text-[rgba(13,35,65,0.7)]"
+                      >
+                        {proactiveUi.btnFix}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
             ))}
             {actionableProactive.pendingValidation.map((memory) => (
               <span

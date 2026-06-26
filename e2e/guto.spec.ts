@@ -967,4 +967,146 @@ test.describe('GUTO – Fluxos críticos', () => {
     await snap(page, '24-travel-quick-reply')
   })
 
+  // ── 25. Card de decisão bloqueia o chat + alterar data inline não volta pro chat ──
+  // Cobre explicitamente o contrato do card-triad:
+  //  (a) enquanto há card pendente, input de texto / mic / enviar / quick replies somem;
+  //  (b) "ALTERAR DATA" abre edição inline sem sair do card e SALVAR mantém o card (não navega pro chat).
+  test('25 — card de decisão bloqueia input/mic/quick replies e alterar data não volta pro chat', async ({ page }) => {
+    const tripDateKey = toDateKey(addDays(new Date(), 5))
+    const pendingTrip = {
+      id: 'pm-block-e2e',
+      userId: TEST_USER_ID,
+      type: 'trip',
+      status: 'pending_confirmation',
+      stage: 'impact_confirmation',
+      confirmationStage: 'impact',
+      proposedTrainingAdapted: true,
+      rawText: 'viajo na próxima semana',
+      understood: 'Viagem pendente de confirmação',
+      dateText: 'próxima semana',
+      dateParsed: tripDateKey,
+      weekKey: 'e2e-week',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    // memory já chega com card pendente → o chat deve nascer bloqueado
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody({ ...mockMemory, proactiveMemories: [pendingTrip] }))
+    )
+    // refresh (no load e após salvar) mantém o card pendente
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/memories'), (route) =>
+      route.fulfill(jsonBody({ memories: [pendingTrip] }))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/update'), (route) =>
+      route.fulfill(jsonBody({ ok: true, memory: pendingTrip }))
+    )
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    // (a) chat bloqueado: bloco do card presente; input de texto, mic e enviar ausentes
+    const cardBlock = page.getByTestId('guto-chat-card-block')
+    await expect(cardBlock).toBeVisible({ timeout: 10000 })
+    await expect(cardBlock).toContainText(/Confirma o card/i)
+    await expect(page.locator('input[type="text"]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Microfone' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Enviar mensagem' })).toHaveCount(0)
+    // quick replies não aparecem enquanto o card bloqueia
+    await expect(page.getByRole('button', { name: 'SIM' })).toHaveCount(0)
+
+    await snap(page, '25a-card-blocks-chat')
+
+    // (b) alterar data inline — abre no próprio card, sem voltar pro chat
+    await page.getByRole('button', { name: 'ALTERAR DATA' }).click()
+    const dateInput = page.locator('input[type="date"]')
+    await expect(dateInput).toBeVisible({ timeout: 5000 })
+    // segue bloqueado: ainda sem input de texto e card-block presente
+    await expect(cardBlock).toBeVisible()
+    await expect(page.locator('input[type="text"]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'SALVAR DATA' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'VOLTAR' })).toBeVisible()
+
+    await dateInput.fill(toDateKey(addDays(new Date(), 7)))
+    await page.getByRole('button', { name: 'SALVAR DATA' }).click()
+
+    // após salvar: continua no card (chat ainda bloqueado), não navegou pro chat
+    await expect(cardBlock).toBeVisible({ timeout: 8000 })
+    await expect(page.locator('input[type="text"]')).toHaveCount(0)
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible()
+
+    await snap(page, '25b-alterar-data-stays-on-card')
+  })
+
+  // ── 26. Card de CANCELAMENTO de viagem tem ações reais (não fica preso) ──────
+  // Falha real em produção: cancelar uma viagem ativa gerava um card sem botão,
+  // inerte, que não saía. Agora o card de cancelamento bloqueia o chat e oferece
+  // CONFIRMAR CANCELAMENTO / MANTER VIAGEM / ALTERAR DATA.
+  test('26 — card de cancelamento de viagem tem 3 ações e não fica preso', async ({ page }) => {
+    const tripDateKey = toDateKey(addDays(new Date(), 4))
+    const awaitingTrip = {
+      id: 'pm-cancel-e2e',
+      userId: TEST_USER_ID,
+      type: 'trip',
+      status: 'surfaced',
+      stage: 'confirmed_adapted',
+      confirmationStage: 'impact',
+      trainingAdapted: true,
+      rawText: 'viajo sexta',
+      understood: 'Viagem na sexta',
+      dateText: 'sexta',
+      dateParsed: tripDateKey,
+      weekKey: 'e2e-week',
+      discardRequestedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    let discardCalledWith: string | null = null
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody({ ...mockMemory, proactiveMemories: [awaitingTrip] }))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/memories'), (route) =>
+      route.fulfill(jsonBody({ memories: discardCalledWith ? [] : [awaitingTrip] }))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/discard'), (route) => {
+      discardCalledWith = (route.request().postDataJSON() as { memoryId?: string })?.memoryId ?? null
+      return route.fulfill(jsonBody({
+        ok: true,
+        fala: 'Fechado. Cancelei essa viagem e a gente volta ao plano normal.',
+        memoryPatch: { proactiveMemories: [{ ...awaitingTrip, status: 'discarded' }], proactiveImpacts: [] },
+      }))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    // (a) card de cancelamento bloqueia o chat (é a próxima ação) — não fica inerte
+    const cardBlock = page.getByTestId('guto-chat-card-block')
+    await expect(cardBlock).toBeVisible({ timeout: 10000 })
+    await expect(page.locator('input[type="text"]')).toHaveCount(0)
+
+    // (b) tem as 3 ações reais
+    await expect(page.getByRole('button', { name: 'CONFIRMAR CANCELAMENTO' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'MANTER VIAGEM' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'ALTERAR DATA' })).toBeVisible()
+    await expect(page.getByText(/Cancelar a viagem de/i)).toBeVisible()
+    // não vaza texto interno cru
+    await expect(page.getByText(/VIAGEM INFORMADA|understood|rawText/i)).toHaveCount(0)
+
+    await snap(page, '26a-cancel-card-actions')
+
+    // (c) confirmar cancelamento chama o discard e libera o chat
+    await page.getByRole('button', { name: 'CONFIRMAR CANCELAMENTO' }).click()
+    await expect.poll(() => discardCalledWith).toBe('pm-cancel-e2e')
+    await expect(page.locator('input[type="text"]').first()).toBeVisible({ timeout: 8000 })
+    await expect(page.getByTestId('guto-chat-card-block')).toHaveCount(0)
+
+    await snap(page, '26b-cancel-confirmed-chat-freed')
+  })
+
 })

@@ -11,8 +11,11 @@ export type ProactiveMemoryUiCopy = {
   hintValidate: string
   tripTitle: string
   tripQuestion: (dateLabel: string, trainingAdapted?: boolean) => string
+  cancelTripQuestion: (dateLabel: string) => string
   btnConfirm: string
   btnCancel: string
+  btnConfirmCancel: string
+  btnKeepTrip: string
   btnFix: string
   btnSaveDate: string
   btnKeepDate: string
@@ -35,8 +38,11 @@ const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
         : trainingAdapted === false
           ? `Confirmar viagem em ${dateLabel} sem treino adaptado?`
           : `Confirmar viagem em ${dateLabel}?`,
+    cancelTripQuestion: (dateLabel) => `Cancelar a viagem de ${dateLabel}?`,
     btnConfirm: "CONFIRMAR",
     btnCancel: "CANCELAR",
+    btnConfirmCancel: "CONFIRMAR CANCELAMENTO",
+    btnKeepTrip: "MANTER VIAGEM",
     btnFix: "ALTERAR DATA",
     btnSaveDate: "SALVAR DATA",
     btnKeepDate: "VOLTAR",
@@ -57,8 +63,11 @@ const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
         : trainingAdapted === false
           ? `Confirm travel on ${dateLabel} with no adapted workout?`
           : `Confirm travel on ${dateLabel}?`,
+    cancelTripQuestion: (dateLabel) => `Cancel the trip on ${dateLabel}?`,
     btnConfirm: "CONFIRM",
     btnCancel: "CANCEL",
+    btnConfirmCancel: "CONFIRM CANCEL",
+    btnKeepTrip: "KEEP TRIP",
     btnFix: "CHANGE DATE",
     btnSaveDate: "SAVE DATE",
     btnKeepDate: "BACK",
@@ -79,8 +88,11 @@ const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
         : trainingAdapted === false
           ? `Confermare viaggio il ${dateLabel} senza allenamento adattato?`
           : `Confermare viaggio il ${dateLabel}?`,
+    cancelTripQuestion: (dateLabel) => `Annullare il viaggio del ${dateLabel}?`,
     btnConfirm: "CONFERMA",
     btnCancel: "ANNULLA",
+    btnConfirmCancel: "CONFERMA ANNULLAMENTO",
+    btnKeepTrip: "MANTIENI VIAGGIO",
     btnFix: "CAMBIA DATA",
     btnSaveDate: "SALVA DATA",
     btnKeepDate: "INDIETRO",
