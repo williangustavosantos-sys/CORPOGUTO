@@ -36,6 +36,17 @@ export interface WorkoutFeedbackRecord {
   exerciseIds: string[]
 }
 export type GutoAvatarEmotion = "default" | "alert" | "critical" | "reward"
+export type GutoAction =
+  | "none"
+  | "updateWorkout"
+  | "generateDiet"
+  | "swapExercise"
+  | "openProactiveCard"
+  | "callCoach"
+  | "lock"
+  | "changeLanguage"
+  | "requestDeleteAccount"
+  | "showProfile"
 export type GutoTelemetryEvent =
   | "user_created"
   | "pact_completed"
@@ -230,7 +241,7 @@ export interface GutoAtomicTurnDecision {
 export interface SendGutoMessageResponse {
   turnId?: string
   fala?: string
-  acao?: "none" | "updateWorkout" | "lock" | "changeLanguage" | "requestDeleteAccount" | "showProfile"
+  acao?: GutoAction
   expectedResponse?: GutoExpectedResponse | null
   avatarEmotion?: GutoAvatarEmotion
   workoutPlan?: GutoWorkoutPlan | null
@@ -349,7 +360,7 @@ export interface GutoProactiveResponse {
   due: boolean
   slot?: string
   fala?: string
-  acao?: "none" | "updateWorkout" | "lock" | "changeLanguage" | "requestDeleteAccount" | "showProfile"
+  acao?: GutoAction
   expectedResponse?: GutoExpectedResponse | null
   avatarEmotion?: GutoAvatarEmotion
   workoutPlan?: GutoWorkoutPlan | null
@@ -429,6 +440,7 @@ export async function trackGutoEvent(payload: {
   return apiRequest<{ ok: true }>("/guto/events", {
     method: "POST",
     timeoutMs: 5000,
+    suppressAuthRedirect: true,
     body: JSON.stringify({
       ...payload,
       timestamp: new Date().toISOString(),
@@ -573,6 +585,7 @@ export async function getGutoProactive({
   return apiRequest<GutoProactiveResponse>(`/guto/proactive?${params.toString()}`, {
     method: "GET",
     timeoutMs: 30000,
+    suppressAuthRedirect: true,
   })
 }
 
@@ -783,6 +796,7 @@ export async function extractProactivityEvents(
       "/guto/proactivity/extract",
       {
         method: "POST",
+        suppressAuthRedirect: true,
         body: JSON.stringify({ conversationText, language }),
       }
     )
@@ -798,7 +812,11 @@ export async function extractProactivityEvents(
  */
 export async function openWeeklyConversation(): Promise<void> {
   try {
-    await apiRequest("/guto/proactivity/open-weekly", { method: "POST", body: JSON.stringify({}) })
+    await apiRequest("/guto/proactivity/open-weekly", {
+      method: "POST",
+      suppressAuthRedirect: true,
+      body: JSON.stringify({}),
+    })
   } catch {
     // non-critical
   }
@@ -811,7 +829,7 @@ export async function getProactiveMemories(): Promise<ProactiveMemory[]> {
   try {
     const result = await apiRequest<{ memories: ProactiveMemory[] }>(
       "/guto/proactivity/memories",
-      { method: "GET" }
+      { method: "GET", suppressAuthRedirect: true }
     )
     return result.memories ?? []
   } catch {

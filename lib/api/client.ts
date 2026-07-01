@@ -1,4 +1,4 @@
-/** Backend Render (produção). Override com NEXT_PUBLIC_API_URL no .env.local ou Vercel. */
+/** Backend Render (produção). Override com NEXT_PUBLIC_GUTO_API_URL/NEXT_PUBLIC_API_URL. */
 const PRODUCTION_API_URL = "https://cerebroguto.onrender.com"
 
 function shouldUseApiProxy() {
@@ -19,7 +19,8 @@ function shouldUseApiProxy() {
 
 const RAW_API_URL = shouldUseApiProxy()
   ? "/api/guto"
-  : process.env.NEXT_PUBLIC_API_URL ||
+  : process.env.NEXT_PUBLIC_GUTO_API_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
     (process.env.NODE_ENV === "production" ? PRODUCTION_API_URL : "http://localhost:3001")
 
 export const API_URL = RAW_API_URL.replace(/\/+$/, "")
@@ -141,11 +142,12 @@ export function getApiErrorMessage(error: unknown, language?: string): string {
 interface RequestOptions extends RequestInit {
   timeoutMs?: number
   token?: string
+  suppressAuthRedirect?: boolean
 }
 
 export async function apiRequest<T>(
   path: string,
-  { timeoutMs = 15000, token, ...init }: RequestOptions = {}
+  { timeoutMs = 15000, token, suppressAuthRedirect = false, ...init }: RequestOptions = {}
 ): Promise<T> {
   if (!API_URL) {
     throw new ApiError(gutoApiErrorCopy[readErrorLanguage()].missingApiUrl)
@@ -171,9 +173,9 @@ export async function apiRequest<T>(
     if (res.status === 401) {
       const body = await res.json().catch(() => ({}))
       const isLoginEndpoint = path.includes("/login")
-      const suppressAuthRedirect = isQaDemoMode()
+      const shouldSuppressAuthRedirect = suppressAuthRedirect || isQaDemoMode()
 
-      if (!isLoginEndpoint && typeof window !== "undefined" && !suppressAuthRedirect) {
+      if (!isLoginEndpoint && typeof window !== "undefined" && !shouldSuppressAuthRedirect) {
         removeAuthToken()
         if (!window.location.pathname.includes("/login") && !window.location.pathname.includes("/convite")) {
           window.location.href = "/login"
@@ -194,7 +196,7 @@ export async function apiRequest<T>(
         "GUTO_DEAD",
       ])
       if (code && blockedCodes.has(code)) {
-        if (typeof window !== "undefined" && !window.location.pathname.includes("/acesso-pausado")) {
+        if (!suppressAuthRedirect && typeof window !== "undefined" && !window.location.pathname.includes("/acesso-pausado")) {
           window.location.href = `/acesso-pausado?reason=${encodeURIComponent(code)}`
         }
       }
