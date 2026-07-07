@@ -46,6 +46,23 @@ describe("guto proactivity UI", () => {
     assert.equal(formatProactiveMemoryLabel(tripMemory()), "Viagem provável em 2026-06-19 (19/06/2026)")
   })
 
+  it("nunca usa instrução interna como texto de card proativo", () => {
+    const leaked = "Compromisso informado: Evento proativo devido: arrival. Decida a fala e a próxima ação. Não use culpa por streak nem template de agenda."
+    const label = formatProactiveMemoryLabel(tripMemory({
+      type: "commitment",
+      stage: "event_confirmation",
+      confirmationStage: undefined,
+      rawText: leaked,
+      understood: leaked,
+      dateText: undefined,
+      dateParsed: undefined,
+    }))
+    const visibleCardText = getProactiveMemoryUiCopy("pt-BR").pendingConfirm(label)
+
+    assert.equal(visibleCardText, "Confirmar: Compromisso informado")
+    assert.doesNotMatch(visibleCardText, /Evento proativo devido|Decida a fala|streak|expectedResponse|memoryPatch/i)
+  })
+
   it("deduplica cards iguais e mostra só um contexto principal", () => {
     const memories = [
       tripMemory({ id: "pm-trip-1" }),

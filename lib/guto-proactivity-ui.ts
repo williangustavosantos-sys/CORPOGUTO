@@ -127,8 +127,41 @@ export function formatProactiveWeekday(memory: ProactiveMemory, language: Suppor
   return value.charAt(0).toLocaleUpperCase(language) + value.slice(1)
 }
 
+const INTERNAL_PROACTIVE_LABEL_PATTERNS = [
+  /Evento proativo devido:/i,
+  /Prompt ativo:/i,
+  /Card pendente:/i,
+  /Treino já planejado para hoje:/i,
+  /Decida a fala/i,
+  /Não use culpa por streak/i,
+  /\bexpectedResponse\b/i,
+  /\bmemoryPatch\b/i,
+  /\bproactivityContext\b/i,
+  /\bWorldStateV?\d*\b/i,
+]
+
+function isInternalProactiveLabel(value?: string | null): boolean {
+  if (!value?.trim()) return true
+  return INTERNAL_PROACTIVE_LABEL_PATTERNS.some((pattern) => pattern.test(value))
+}
+
+function fallbackProactiveMemoryLabel(memory: ProactiveMemory): string {
+  if (memory.type === "trip") return "Viagem informada"
+  if (memory.type === "commitment") return "Compromisso informado"
+  if (memory.type === "schedule") return "Agenda informada"
+  return "Contexto informado"
+}
+
+function safeProactiveMemoryLabelBase(memory: ProactiveMemory): string {
+  for (const value of [memory.understood, memory.rawText]) {
+    const candidate = value?.replace(/\s+/g, " ").trim().replace(/:\s*$/, "")
+    if (candidate && !isInternalProactiveLabel(candidate)) return candidate
+  }
+  return fallbackProactiveMemoryLabel(memory)
+}
+
 export function formatProactiveMemoryLabel(memory: ProactiveMemory): string {
-  const base = memory.understood?.trim() || memory.rawText?.trim() || memory.type
+  const base = safeProactiveMemoryLabelBase(memory)
   const absoluteDate = memory.dateParsed ? formatProactiveDate(memory, "pt-BR") : null
   if (absoluteDate) return `${base} (${absoluteDate})`
   if (memory.dateText?.trim()) return `${base} (${memory.dateText.trim()})`

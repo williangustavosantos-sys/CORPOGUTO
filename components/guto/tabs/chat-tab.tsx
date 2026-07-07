@@ -1078,15 +1078,15 @@ export function ChatTab({
         return appendMessagesWithoutDuplicateGuto(prev, [gutoMessage])
       })
 
-      // Propagate workout plan to mission tab
-      if (data.acao === "updateWorkout" && data.workoutPlan) {
-        onWorkoutPlanUpdated?.(data.workoutPlan)
+      const nextWorkoutPlan = data.workoutPlan || data.memoryPatch?.lastWorkoutPlan || null
+      if (nextWorkoutPlan) {
+        onWorkoutPlanUpdated?.(nextWorkoutPlan)
       }
       if (data.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
         applyProactiveMemoriesFromPatch(data.memoryPatch)
         onMemoryPatch?.(data.memoryPatch)
       }
-      if (data.workoutPlan && !dietGenerationAfterWorkoutRef.current) {
+      if (nextWorkoutPlan && !dietGenerationAfterWorkoutRef.current) {
         dietGenerationAfterWorkoutRef.current = true
         void generateDietPlan(safeLanguage).catch((error) => {
           dietGenerationAfterWorkoutRef.current = false
@@ -1426,8 +1426,9 @@ export function ChatTab({
       }
 
       setMessages((prev) => appendMessagesWithoutDuplicateGuto(prev, [gutoMessage]))
-      if (data.acao === "updateWorkout" && data.workoutPlan) {
-        onWorkoutPlanUpdated?.(data.workoutPlan)
+      const nextWorkoutPlan = data.workoutPlan || data.memoryPatch?.lastWorkoutPlan || null
+      if (nextWorkoutPlan) {
+        onWorkoutPlanUpdated?.(nextWorkoutPlan)
       }
       const patchHasProactiveMemories = applyProactiveMemoriesFromPatch(data.memoryPatch)
       if (data.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
@@ -1448,7 +1449,7 @@ export function ChatTab({
         void refreshProactiveMemories()
       }
       stopTypingLoop()
-      const closedWorkoutFlow = data.acao === "updateWorkout" || Boolean(data.workoutPlan)
+      const closedWorkoutFlow = data.acao === "updateWorkout" || Boolean(nextWorkoutPlan)
       const dietReadyFromBackend = data.memoryPatch?.dietGenerationStatus === "ready_to_generate"
       if (closedWorkoutFlow) {
         suppressProactivityUntilRef.current = Date.now() + PROACTIVITY_SUPPRESS_AFTER_WORKOUT_MS
