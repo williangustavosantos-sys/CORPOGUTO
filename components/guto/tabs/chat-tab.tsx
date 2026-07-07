@@ -767,10 +767,23 @@ export function ChatTab({
     return memories
   }, [])
 
+  const applyProactiveMemoriesFromPatch = useCallback((patch?: Partial<GutoMemory> | null) => {
+    if (!Array.isArray(patch?.proactiveMemories)) return false
+    setProactiveMemories(patch.proactiveMemories)
+    return true
+  }, [])
+
+  useEffect(() => {
+    if (Array.isArray(memory?.proactiveMemories)) {
+      setProactiveMemories(memory.proactiveMemories)
+    }
+  }, [memory?.proactiveMemories])
+
   const applyProactiveActionResult = useCallback(
     (result?: GutoProactivityActionResult | null) => {
       const memoryPatch = getProactivityActionMemoryPatch(result)
       if (memoryPatch) {
+        applyProactiveMemoriesFromPatch(memoryPatch)
         onMemoryPatch?.(memoryPatch)
       }
 
@@ -786,7 +799,7 @@ export function ChatTab({
         })),
       )
     },
-    [onMemoryPatch]
+    [applyProactiveMemoriesFromPatch, onMemoryPatch]
   )
 
   // Botões Sim/Não do card de proatividade: resolve de forma determinística
@@ -1070,6 +1083,7 @@ export function ChatTab({
         onWorkoutPlanUpdated?.(data.workoutPlan)
       }
       if (data.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
+        applyProactiveMemoriesFromPatch(data.memoryPatch)
         onMemoryPatch?.(data.memoryPatch)
       }
       if (data.workoutPlan && !dietGenerationAfterWorkoutRef.current) {
@@ -1093,7 +1107,7 @@ export function ChatTab({
       proactiveInFlightRef.current = false
       if (forceArrivalBriefing) setIsSending(false)
     }
-  }, [isMuted, language, onMemoryPatch, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
+  }, [applyProactiveMemoriesFromPatch, isMuted, language, onMemoryPatch, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
 
   // Após o card +100 XP: a chegada passa pelo backend, que decide se precisa
   // abrir contexto semanal antes de missão.
@@ -1415,6 +1429,7 @@ export function ChatTab({
       if (data.acao === "updateWorkout" && data.workoutPlan) {
         onWorkoutPlanUpdated?.(data.workoutPlan)
       }
+      const patchHasProactiveMemories = applyProactiveMemoriesFromPatch(data.memoryPatch)
       if (data.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
         onMemoryPatch?.(data.memoryPatch)
       }
@@ -1427,7 +1442,11 @@ export function ChatTab({
       if (data.acao === "requestDeleteAccount") {
         onOpenPrivacySettings?.()
       }
-      void handleProactiveMemoryAction(data.proactiveMemoryAction).then(() => refreshProactiveMemories())
+      if (data.proactiveMemoryAction) {
+        void handleProactiveMemoryAction(data.proactiveMemoryAction)
+      } else if (!patchHasProactiveMemories) {
+        void refreshProactiveMemories()
+      }
       stopTypingLoop()
       const closedWorkoutFlow = data.acao === "updateWorkout" || Boolean(data.workoutPlan)
       const dietReadyFromBackend = data.memoryPatch?.dietGenerationStatus === "ready_to_generate"
@@ -1482,6 +1501,7 @@ export function ChatTab({
     onChangeLanguage,
     onMemoryPatch,
     onOpenPrivacySettings,
+    applyProactiveMemoriesFromPatch,
     handleProactiveMemoryAction,
     refreshProactiveMemories,
     onWorkoutPlanUpdated,

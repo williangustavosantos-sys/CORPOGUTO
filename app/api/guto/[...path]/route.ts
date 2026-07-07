@@ -1,6 +1,11 @@
 import { NextRequest } from "next/server"
 
-const BACKEND_URL = (process.env.GUTO_BACKEND_PROXY_URL || process.env.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "")
+const BACKEND_URL = (
+  process.env.GUTO_BACKEND_PROXY_URL ||
+  process.env.NEXT_PUBLIC_GUTO_API_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  ""
+).replace(/\/+$/, "")
 const PREVIEW_HOST_SUFFIX = ".vercel.app"
 const PRODUCTION_HOSTS = new Set(["corpoguto.vercel.app"])
 

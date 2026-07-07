@@ -674,8 +674,11 @@ function resolveAuthenticatedStage(
     return "calibration"
   }
 
-  // Pacto: flag local OU prova no backend (XP inicial já concedido).
-  if (profile?.onboardingComplete || profile?.pactAccepted || pactDoneBackend) {
+  // Pacto: quando a memória carregou, o backend manda. Flag local só serve como
+  // fallback se a memória não carregou; isso evita entrar no app sem XP/pacto
+  // gravados no servidor.
+  const pactDoneLocal = Boolean(profile?.onboardingComplete || profile?.pactAccepted)
+  if (memory ? pactDoneBackend : pactDoneLocal) {
     return "system"
   }
 
@@ -1049,6 +1052,40 @@ export function GutoApp({
 
         if (cancelled) return
 
+        const onboardingIncomplete = !stored?.onboardingComplete && !stored?.pactAccepted
+        const persistedLanguage = readResolvedStoredLanguage({
+          scope: onboardingIncomplete ? "onboarding" : "private",
+          localProfileLanguage: stored?.language,
+          memoryLanguage: loadedMemory?.language,
+          fallbackLanguage: language,
+        })
+        if (process.env.NODE_ENV === "development") {
+          console.info("[GUTO_LANGUAGE] resolved after auth:", persistedLanguage)
+        }
+
+        const localPactDone = Boolean(stored?.onboardingComplete || stored?.pactAccepted)
+        if (
+          localPactDone &&
+          loadedMemory &&
+          hasMemoryConsent(loadedMemory) &&
+          hasCompleteGutoCalibration(loadedMemory) &&
+          !loadedMemory.initialXpGranted
+        ) {
+          const repairPayload: GutoMemoryPayload = {
+            userId: currentUserId,
+            language: persistedLanguage,
+            xpEvent: "grant_initial_xp",
+          }
+          const repairedName = firstRealGutoName(stored?.userName, loadedMemory.name)
+          if (repairedName) repairPayload.name = repairedName
+          try {
+            loadedMemory = await saveGutoMemory(repairPayload)
+            if (cancelled) return
+          } catch (error) {
+            console.warn(`Pacto do GUTO não reconciliado: ${getApiErrorMessage(error)}`)
+          }
+        }
+
         if (loadedMemory) {
           setMemory(loadedMemory)
           setEvolution(resolveEvolutionStage(loadedMemory.totalXp || 0))
@@ -1063,16 +1100,6 @@ export function GutoApp({
           }
         }
 
-        const onboardingIncomplete = !stored?.onboardingComplete && !stored?.pactAccepted
-        const persistedLanguage = readResolvedStoredLanguage({
-          scope: onboardingIncomplete ? "onboarding" : "private",
-          localProfileLanguage: stored?.language,
-          memoryLanguage: loadedMemory?.language,
-          fallbackLanguage: language,
-        })
-        if (process.env.NODE_ENV === "development") {
-          console.info("[GUTO_LANGUAGE] resolved after auth:", persistedLanguage)
-        }
         const resolvedProfile = resolveGutoProfile({
           user,
           stored,
@@ -1181,12 +1208,30 @@ export function GutoApp({
   }, [clearIntroSafetyTimer, stage])
 
   const startSystem = useCallback(
-    (finalName: string, finalLanguage: SupportedLanguage) => {
+    async (finalName: string, finalLanguage: SupportedLanguage) => {
       if (pactCompleteRef.current) return
       pactCompleteRef.current = true
       gutoAudio.stopGutoSound("hold_charge")
-      gutoAudio.playGutoFeedback("hold_complete")
+      setProfileSaveError(null)
 
+      const updated = await persistMemory({
+        name: finalName,
+        language: finalLanguage,
+        trainedToday: false,
+        xpEvent: "grant_initial_xp",
+      }, { optimistic: false })
+
+      if (!updated) {
+        pactCompleteRef.current = false
+        setPactProgress(0)
+        setIsHoldingPact(false)
+        setWhiteout(false)
+        gutoAudio.playGutoFeedback("error")
+        setProfileSaveError(stageCopy[finalLanguage].profileSaveError)
+        return
+      }
+
+      gutoAudio.playGutoFeedback("hold_complete")
       effectRegistry.emit("whiteout")
       persistProfile({
         language: finalLanguage,
@@ -1195,13 +1240,9 @@ export function GutoApp({
         pactAccepted: true,
         onboardingComplete: true,
       })
-      persistMemory({
-        name: finalName,
-        language: finalLanguage,
-        trainedToday: false,
-        xpEvent: "grant_initial_xp",
-      })
       trackBehaviorEvent("pact_completed", { finalLanguage })
+      setMemory(updated)
+      setEvolution(resolveEvolutionStage(updated.totalXp || 0))
       setPactProgress(100)
       setIsHoldingPact(false)
       setWhiteout(true)
@@ -1960,7 +2001,7 @@ export function GutoApp({
 
         if (next >= 100) {
           clearPactInterval()
-          startSystem(
+          void startSystem(
             committedName || formatGutoName(draftName || userName || ""),
             selectedLanguage
           )
@@ -2264,6 +2305,7 @@ export function GutoApp({
             language={selectedLanguage}
             onFoodDoubt={handleFoodDoubt}
             memory={memory}
+            onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
           />
         )
       default:
