@@ -359,6 +359,7 @@ export interface GutoResolvedProfileFields {
 export interface GutoProactiveResponse {
   due: boolean
   slot?: string
+  deliveryCommitted?: boolean
   fala?: string
   acao?: GutoAction
   expectedResponse?: GutoExpectedResponse | null
@@ -401,11 +402,15 @@ export interface DietMeal {
 
 export interface DietPlan {
   userId: string
+  revision?: string
+  profileFingerprint?: string
   title?: string
   // Idioma em que o conteúdo visível foi gerado ("idioma é lei": regenera se mudar).
   language?: string
   generatedAt: string
   country: string
+  countryCode?: string
+  city?: string
   macros: DietMacros
   meals: DietMeal[]
   goal?: string
@@ -426,7 +431,9 @@ export interface DietPlan {
 export async function sendGutoMessage(payload: SendGutoMessageRequest) {
   return apiRequest<SendGutoMessageResponse>("/guto", {
     method: "POST",
-    timeoutMs: 35000,
+    // A diet action can legitimately consume the same validated retry budget
+    // as POST /guto/diet/generate (up to ~60s).
+    timeoutMs: 70000,
     body: JSON.stringify(payload),
   })
 }
@@ -584,7 +591,9 @@ export async function getGutoProactive({
 
   return apiRequest<GutoProactiveResponse>(`/guto/proactive?${params.toString()}`, {
     method: "GET",
-    timeoutMs: 30000,
+    // First arrival may spend ~30s in the sovereign decision and up to 18s in
+    // catalog curation before it can atomically commit the mission.
+    timeoutMs: 60000,
     suppressAuthRedirect: true,
   })
 }
@@ -629,17 +638,59 @@ export async function getDietPlan() {
       method: "GET",
     })
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) return null
+    if (
+      err instanceof ApiError &&
+      err.status === 404 &&
+      typeof err.details === "object" &&
+      err.details !== null &&
+      (err.details as { error?: unknown }).error === "diet_not_found"
+    ) return null
     throw err
   }
 }
 
-export async function generateDietPlan(language: SupportedLanguage = "pt-BR") {
-  return apiRequest<DietPlan>("/guto/diet/generate", {
+type GutoDietSingleFlightGlobal = typeof globalThis & {
+  __gutoDietGenerationInFlight?: Map<string, Promise<DietPlan>>
+}
+
+// ChatTab and DietTab may live in separate Next.js client chunks. Keeping the
+// registry on globalThis guarantees one browser-wide flight even if the module
+// is instantiated once per chunk during development/HMR.
+const dietSingleFlightGlobal = globalThis as GutoDietSingleFlightGlobal
+const dietGenerationInFlight = dietSingleFlightGlobal.__gutoDietGenerationInFlight
+  ?? new Map<string, Promise<DietPlan>>()
+dietSingleFlightGlobal.__gutoDietGenerationInFlight = dietGenerationInFlight
+
+export function generateDietPlan(language: SupportedLanguage = "pt-BR", userId?: string) {
+  const singleFlightKey = `${userId || "current-user"}:${language}`
+  const activeRequest = dietGenerationInFlight.get(singleFlightKey)
+  if (activeRequest) return activeRequest
+
+  const sharedRequest = apiRequest<DietPlan>("/guto/diet/generate", {
     method: "POST",
-    timeoutMs: 45000,
+    // Backend can make up to three validated 20s attempts before the
+    // deterministic fallback. Keep the client alive beyond that budget so an
+    // abort never releases the server lease while generation still runs.
+    timeoutMs: 70000,
     body: JSON.stringify({ language }),
   })
+  void sharedRequest.then(() => {
+    // Keep the fulfilled promise briefly: React effect remounts and the Chat →
+    // Diet handoff can be sequential by a few milliseconds even though they
+    // represent the same generation intent. A short success grace window
+    // prevents a second POST while still allowing an explicit later regenerate.
+    setTimeout(() => {
+      if (dietGenerationInFlight.get(singleFlightKey) === sharedRequest) {
+        dietGenerationInFlight.delete(singleFlightKey)
+      }
+    }, 1_500)
+  }, () => {
+    if (dietGenerationInFlight.get(singleFlightKey) === sharedRequest) {
+      dietGenerationInFlight.delete(singleFlightKey)
+    }
+  })
+  dietGenerationInFlight.set(singleFlightKey, sharedRequest)
+  return sharedRequest
 }
 
 // ─── Proactivity API ──────────────────────────────────────────────────────────

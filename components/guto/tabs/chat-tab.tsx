@@ -12,7 +12,6 @@ import {
   confirmProactiveMemory,
   discardProactiveMemory,
   extractProactivityEvents,
-  generateDietPlan,
   getGutoProactive,
   getProactiveMemories,
   requestDiscardProactiveMemory,
@@ -79,6 +78,7 @@ interface ChatTabProps {
   memory?: GutoMemory | null
   onProfileUpdate?: (field: string, value: string | number) => Promise<void>
   onMemoryPatch?: (patch: Partial<GutoMemory>) => void
+  onGenerateDiet: (language: SupportedLanguage) => Promise<unknown>
   onChangeLanguage?: (language: SupportedLanguage) => void
   onOpenPrivacySettings?: () => void
   isAvatarActive?: boolean
@@ -605,6 +605,7 @@ export function ChatTab({
   onXpRewardSeen,
   memory,
   onMemoryPatch,
+  onGenerateDiet,
   onChangeLanguage,
   onOpenPrivacySettings,
   isAvatarActive = true,
@@ -1050,12 +1051,11 @@ export function ChatTab({
       if (!data.due || !fala) {
         if (forceArrivalBriefing) {
           syncExpectedResponse(null, null)
-          markDeliveredArrivalBriefing(userId)
         }
         return
       }
 
-      const proactiveKey = `${data.slot || "slot"}-${fala}`
+      const proactiveKey = `${data.slot || "slot"}-${data.deliveryCommitted === false ? "pending" : "committed"}-${fala}`
       if (lastProactiveKeyRef.current === proactiveKey) return
       lastProactiveKeyRef.current = proactiveKey
 
@@ -1078,24 +1078,31 @@ export function ChatTab({
         return appendMessagesWithoutDuplicateGuto(prev, [gutoMessage])
       })
 
-      const nextWorkoutPlan = data.workoutPlan || data.memoryPatch?.lastWorkoutPlan || null
-      if (nextWorkoutPlan) {
-        onWorkoutPlanUpdated?.(nextWorkoutPlan)
-      }
-      if (data.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
-        applyProactiveMemoriesFromPatch(data.memoryPatch)
-        onMemoryPatch?.(data.memoryPatch)
-      }
-      if (nextWorkoutPlan && !dietGenerationAfterWorkoutRef.current) {
-        dietGenerationAfterWorkoutRef.current = true
-        void generateDietPlan(safeLanguage).catch((error) => {
-          dietGenerationAfterWorkoutRef.current = false
-          console.warn(`Dieta base do GUTO não foi gerada na chegada: ${getApiErrorMessage(error)}`)
-        })
-      }
+      // A fala de recuperação pode ser exibida, mas nenhum artefato derivado é
+      // aplicado antes de o backend confirmar que missão + memória foram
+      // persistidas. Isso impede uma missão fantasma e uma dieta gerada sobre
+      // um plano que o servidor recusou no commit.
+      if (data.deliveryCommitted !== false) {
+        const nextWorkoutPlan = data.workoutPlan || data.memoryPatch?.lastWorkoutPlan || null
+        if (nextWorkoutPlan) {
+          onWorkoutPlanUpdated?.(nextWorkoutPlan)
+        }
+        if (data.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
+          applyProactiveMemoriesFromPatch(data.memoryPatch)
+          onMemoryPatch?.(data.memoryPatch)
+        }
+        if (nextWorkoutPlan && !dietGenerationAfterWorkoutRef.current) {
+          dietGenerationAfterWorkoutRef.current = true
+          void onGenerateDiet(safeLanguage)
+            .catch((error) => {
+              dietGenerationAfterWorkoutRef.current = false
+              console.warn(`Dieta base do GUTO não foi gerada na chegada: ${getApiErrorMessage(error)}`)
+            })
+        }
 
-      if (data.slot === "arrival" || forceArrivalBriefing) {
-        markDeliveredArrivalBriefing(userId)
+        if (data.slot === "arrival" || forceArrivalBriefing) {
+          markDeliveredArrivalBriefing(userId)
+        }
       }
 
       if (!isMuted) {
@@ -1105,9 +1112,12 @@ export function ChatTab({
       console.warn(`Proatividade do GUTO indisponível: ${getApiErrorMessage(error)}`)
     } finally {
       proactiveInFlightRef.current = false
-      if (forceArrivalBriefing) setIsSending(false)
+      if (forceArrivalBriefing) {
+        arrivalBriefingRequestedRef.current = false
+        setIsSending(false)
+      }
     }
-  }, [applyProactiveMemoriesFromPatch, isMuted, language, onMemoryPatch, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
+  }, [applyProactiveMemoriesFromPatch, isMuted, language, onGenerateDiet, onMemoryPatch, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
 
   // Após o card +100 XP: a chegada passa pelo backend, que decide se precisa
   // abrir contexto semanal antes de missão.
@@ -1151,7 +1161,11 @@ export function ChatTab({
     )
 
     const timer = window.setInterval(() => {
-      void checkProactiveMessage()
+      const shouldRetryFirstArrival =
+        calibrationComplete &&
+        !hasDeliveredArrivalBriefing(userId) &&
+        !memory?.hasSeenChatOpening
+      void checkProactiveMessage(shouldRetryFirstArrival)
     }, PROACTIVE_CHECK_INTERVAL_MS)
 
     return () => window.clearInterval(timer)
@@ -1170,33 +1184,6 @@ export function ChatTab({
       markDeliveredArrivalBriefing(userId)
     }
   }, [memory?.hasSeenChatOpening, userId])
-
-  useEffect(() => {
-    const profileReadyForDiet = Boolean(
-      memory?.heightCm &&
-      memory?.weightKg &&
-      memory?.trainingGoal &&
-      memory?.biologicalSex &&
-      memory?.userAge &&
-      (memory?.trainingLevel || memory?.trainingStatus) &&
-      memory?.country &&
-      memory?.countryCode
-    )
-    const dietAlreadyHandled =
-      memory?.dietGenerationStatus === "generated" ||
-      memory?.dietGenerationStatus === "generating" ||
-      memory?.dietGenerationStatus === "needs_clarification" ||
-      Boolean(memory?.weeklyDietPlan)
-    if (!calibrationComplete || !profileReadyForDiet || dietAlreadyHandled || dietGenerationAfterWorkoutRef.current) return
-
-    dietGenerationAfterWorkoutRef.current = true
-    void generateDietPlan(validLang).then(() => {
-      onMemoryPatch?.({ dietGenerationStatus: "generated" })
-    }).catch((error) => {
-      dietGenerationAfterWorkoutRef.current = false
-      console.warn(`Dieta base do GUTO não foi gerada após a calibragem: ${getApiErrorMessage(error)}`)
-    })
-  }, [calibrationComplete, memory, onMemoryPatch, validLang])
 
   useEffect(() => {
     if (showInitialXpCard) return
@@ -1455,10 +1442,11 @@ export function ChatTab({
         suppressProactivityUntilRef.current = Date.now() + PROACTIVITY_SUPPRESS_AFTER_WORKOUT_MS
         if (dietReadyFromBackend && !dietGenerationAfterWorkoutRef.current) {
           dietGenerationAfterWorkoutRef.current = true
-          void generateDietPlan(safeLanguage).catch((error) => {
-            dietGenerationAfterWorkoutRef.current = false
-            console.warn(`Dieta do GUTO não foi gerada após fechar treino: ${getApiErrorMessage(error)}`)
-          })
+          void onGenerateDiet(safeLanguage)
+            .catch((error) => {
+              dietGenerationAfterWorkoutRef.current = false
+              console.warn(`Dieta do GUTO não foi gerada após fechar treino: ${getApiErrorMessage(error)}`)
+            })
         }
       }
 
@@ -1500,6 +1488,7 @@ export function ChatTab({
     isMuted,
     language,
     onChangeLanguage,
+    onGenerateDiet,
     onMemoryPatch,
     onOpenPrivacySettings,
     applyProactiveMemoriesFromPatch,

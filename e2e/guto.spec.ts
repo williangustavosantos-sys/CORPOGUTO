@@ -422,7 +422,321 @@ test.describe('GUTO – Fluxos críticos', () => {
     expect(bodyText).not.toMatch(/Como posso te ajudar hoje/i)
   })
 
-  test('10c — card interno do chat mostra apenas GUTO, sem duplicar a dupla', async ({ page }) => {
+  test('10c — chegada sem missão não dispara dieta por decisão paralela do frontend', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const newUserMemory = {
+      ...mockMemory,
+      totalXp: 100,
+      streak: 0,
+      initialXpRewardSeen: true,
+      hasSeenChatOpening: false,
+      lastWorkoutPlan: undefined,
+      weeklyWorkoutPlan: undefined,
+      weeklyDietPlan: undefined,
+      dietGenerationStatus: 'idle',
+      proactiveMemories: [],
+      proactiveImpacts: [],
+    }
+    let dietGenerateCalls = 0
+    let arrivalCalls = 0
+    let memoryGetCalls = 0
+    let dietGetCalls = 0
+
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) => {
+      memoryGetCalls += 1
+      return route.fulfill(jsonBody(newUserMemory))
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) => {
+      dietGetCalls += 1
+      // Estado legado do bug original: dieta IA existe, mas a missão não.
+      // O frontend deve escondê-la até existir treino persistido.
+      return route.fulfill(jsonBody(mockDiet))
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill(jsonBody(mockDiet))
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.includes('/guto/proactive'), (route) => {
+      arrivalCalls += 1
+      return route.fulfill(jsonBody({
+        due: true,
+        slot: 'arrival',
+        deliveryCommitted: false,
+        fala: 'QA, estou fechando tua primeira missão com o que você me passou.',
+        acao: 'updateWorkout',
+        expectedResponse: null,
+        avatarEmotion: 'default',
+        workoutPlan: mockMemory.lastWorkoutPlan,
+        memoryPatch: {
+          lastWorkoutPlan: mockMemory.lastWorkoutPlan,
+          dietGenerationStatus: 'ready_to_generate',
+        },
+      }))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(/estou fechando tua primeira missão/i)).toBeVisible({ timeout: 10000 })
+    await page.waitForTimeout(1000)
+
+    expect(dietGenerateCalls).toBe(0)
+    expect(arrivalCalls).toBeGreaterThanOrEqual(1)
+
+    const arrivalCallsBeforeReload = arrivalCalls
+    await page.reload()
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await expect.poll(() => arrivalCalls, { timeout: 10000 }).toBeGreaterThan(arrivalCallsBeforeReload)
+
+    await page.getByRole('button', { name: 'MISSÃO' }).click()
+    await expect(page.getByText(/Supino Reto com Barra/i)).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    await expect(page.getByText(/dieta nasce depois da primeira missão/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+    const readsAtWaitingState = { memory: memoryGetCalls, diet: dietGetCalls }
+    await page.waitForTimeout(1_000)
+    expect(memoryGetCalls).toBe(readsAtWaitingState.memory)
+    expect(dietGetCalls).toBe(readsAtWaitingState.diet)
+  })
+
+  test('10d — chegada pendente fecha missão e gera exatamente uma dieta persistida', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const newUserMemory: typeof mockMemory & {
+      hasSeenChatOpening: boolean
+      dietGenerationStatus: string
+      weeklyWorkoutPlan?: unknown
+      weeklyDietPlan?: unknown
+    } = {
+      ...mockMemory,
+      totalXp: 100,
+      streak: 0,
+      hasSeenChatOpening: false,
+      lastWorkoutPlan: undefined as never,
+      weeklyWorkoutPlan: undefined,
+      weeklyDietPlan: undefined,
+      dietGenerationStatus: 'idle',
+    }
+    let dietGenerateCalls = 0
+    const dietGenerateBodies: Array<string | null> = []
+    let persistedDiet: typeof mockDiet | null = null
+    let releaseDietGeneration!: () => void
+    const dietGenerationBarrier = new Promise<void>((resolve) => {
+      releaseDietGeneration = resolve
+    })
+
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody(newUserMemory))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) => {
+      if (persistedDiet) return route.fulfill(jsonBody(persistedDiet))
+      return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'diet_not_found' }) })
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), async (route) => {
+      dietGenerateCalls += 1
+      dietGenerateBodies.push(route.request().postData())
+      newUserMemory.dietGenerationStatus = 'generating'
+      await dietGenerationBarrier
+      persistedDiet = mockDiet
+      newUserMemory.dietGenerationStatus = 'generated'
+      return route.fulfill(jsonBody(mockDiet))
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.includes('/guto/proactive'), (route) => {
+      const referer = route.request().headers().referer
+      const isCommittedDocument = Boolean(
+        referer && new URL(referer).searchParams.get('arrival-commit') === '1'
+      )
+      if (!isCommittedDocument) {
+        return route.fulfill(jsonBody({
+          due: true,
+          slot: 'arrival',
+          deliveryCommitted: false,
+          fala: 'QA, estou fechando tua primeira missão com segurança.',
+          acao: 'none',
+          expectedResponse: null,
+        }))
+      }
+
+      if (newUserMemory.hasSeenChatOpening) {
+        return route.fulfill(jsonBody({ due: false }))
+      }
+
+      newUserMemory.hasSeenChatOpening = true
+      newUserMemory.lastWorkoutPlan = mockMemory.lastWorkoutPlan
+      newUserMemory.dietGenerationStatus = 'ready_to_generate'
+      return route.fulfill(jsonBody({
+        due: true,
+        slot: 'arrival',
+        deliveryCommitted: true,
+        fala: 'Finalmente, QA. Tua primeira missão está pronta. Bora?',
+        acao: 'updateWorkout',
+        expectedResponse: null,
+        workoutPlan: mockMemory.lastWorkoutPlan,
+        memoryPatch: {
+          lastWorkoutPlan: mockMemory.lastWorkoutPlan,
+          dietGenerationStatus: 'ready_to_generate',
+        },
+      }))
+    })
+
+    await page.goto('/')
+    await expect(page.getByText(/estou fechando tua primeira missão com segurança/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+
+    // A URL distinta identifica o novo documento. Qualquer probe que ainda
+    // esteja saindo da página pendente continua recebendo deliveryCommitted
+    // false, em vez de iniciar uma geração que o próprio reload abortaria.
+    await page.goto('/?arrival-commit=1')
+    await expect(page.getByText(/tua primeira missão está pronta/i)).toBeVisible({ timeout: 10000 })
+    await expect.poll(() => dietGenerateCalls, { timeout: 10000 }).toBe(1)
+    expect(persistedDiet).toBeNull()
+
+    await page.getByRole('button', { name: 'MISSÃO' }).click()
+    await expect(page.getByText(/Supino Reto com Barra/i)).toBeVisible({ timeout: 10000 })
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    await expect(page.getByText(/GUTO calculando/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls, JSON.stringify(dietGenerateBodies)).toBe(1)
+    expect(persistedDiet).toBeNull()
+    releaseDietGeneration()
+    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 15000 })
+    expect(dietGenerateCalls, JSON.stringify(dietGenerateBodies)).toBe(1)
+    expect(persistedDiet).not.toBeNull()
+  })
+
+  test('10e — status generating órfão recupera a dieta sem ficar preso', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const orphanGeneratingMemory = {
+      ...mockMemory,
+      dietGenerationStatus: 'generating',
+    }
+    let dietGenerateCalls = 0
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody(orphanGeneratingMemory))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
+      route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'diet_not_found' }) })
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill(jsonBody(mockDiet))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(1)
+  })
+
+  test('10f — dieta converge para missão ausente quando o backend rejeita cache stale', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const memoryWithoutMission = {
+      ...mockMemory,
+      lastWorkoutPlan: undefined,
+      weeklyWorkoutPlan: undefined,
+      dietGenerationStatus: 'idle',
+    }
+    let dietPolicySeen = false
+    let dietGenerateCalls = 0
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody(dietPolicySeen ? memoryWithoutMission : mockMemory))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) => {
+      dietPolicySeen = true
+      return route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'diet_mission_missing',
+          code: 'MISSION_REQUIRED_FOR_DIET',
+          message: 'A dieta nasce depois da primeira missão.',
+        }),
+      })
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill(jsonBody(mockDiet))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    await expect(page.getByText(/dieta nasce depois da primeira missão/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+  })
+
+  test('10g — retry atualiza missão removida e não repete geração em 409', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const memoryWithoutMission = {
+      ...mockMemory,
+      lastWorkoutPlan: undefined,
+      weeklyWorkoutPlan: undefined,
+      dietGenerationStatus: 'idle',
+    }
+    let missionWasRemoved = false
+    let dietGenerateCalls = 0
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody(missionWasRemoved ? memoryWithoutMission : mockMemory))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'temporary_failure' }) })
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'mission_required', code: 'MISSION_REQUIRED_FOR_DIET' }),
+      })
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    const retryButton = page.getByRole('button', { name: 'REGENERAR DIETA' })
+    await expect(retryButton).toBeVisible({ timeout: 10000 })
+    missionWasRemoved = true
+    await retryButton.click()
+    await expect(page.getByText(/dieta nasce depois da primeira missão/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+  })
+
+  test('10h — dieta soberana antiga do coach continua visível e não regenera', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const oldCoachDiet = {
+      ...mockDiet,
+      generatedAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
+      lockedByCoach: true,
+      source: 'coach_manual',
+    }
+    let dietGenerateCalls = 0
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
+      route.fulfill(jsonBody(oldCoachDiet))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill(jsonBody(mockDiet))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+  })
+
+  test('10i — card interno do chat mostra apenas GUTO, sem duplicar a dupla', async ({ page }) => {
     await injectAuthStorage(page)
     await setupApiMocks(page)
     await page.goto('/')
