@@ -2258,11 +2258,11 @@ export function GutoApp({
       vitalState={vitalState}
       initialXpGranted={memory?.initialXpGranted}
       initialXpRewardSeen={memory?.initialXpRewardSeen}
-      onXpRewardSeen={() => {
+      onXpRewardSeen={async () => {
         if (memory) {
           const updated = { ...memory, initialXpRewardSeen: true };
           setMemory(updated);
-          persistMemory({ initialXpRewardSeen: true });
+          await persistMemory({ initialXpRewardSeen: true });
         }
       }}
       onProfileUpdate={updateUserProfileField}
