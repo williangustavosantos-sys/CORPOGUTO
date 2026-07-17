@@ -35,6 +35,17 @@ describe("guto proactivity UI", () => {
     assert.equal(actionable.pendingConfirmation[0]?.type, "trip")
   })
 
+  it("mostra confirmação da viagem real ainda no estágio do evento", () => {
+    const actionable = getActionableProactiveMemories([tripMemory({
+      stage: "continuity_question",
+      confirmationStage: "event",
+    })])
+
+    assert.equal(actionable.pendingConfirmation.length, 1)
+    assert.equal(actionable.pendingConfirmation[0]?.stage, "continuity_question")
+    assert.equal(actionable.pendingConfirmation[0]?.confirmationStage, "event")
+  })
+
   it("usa copy de decisao visual para viagem detectada", () => {
     const copy = getProactiveMemoryUiCopy("pt-BR")
 

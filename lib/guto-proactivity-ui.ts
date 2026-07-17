@@ -203,8 +203,11 @@ export function getActionableProactiveMemories(
   const pendingConfirmation = dedupeProactiveMemories(
     memories.filter((item) => {
       if (item.status !== "pending_confirmation") return false
-      if (item.type !== "trip") return true
-      return item.stage === "impact_confirmation" || (!item.stage && item.confirmationStage === "impact")
+      // A viagem já foi extraída de uma fala real do usuário, mas ainda precisa
+      // de confirmação explícita. Esconder os estágios `event`/
+      // `continuity_question` deixava o backend com memória pendente e impacto
+      // ativo sem oferecer nenhuma ação correspondente no app.
+      return true
     })
   )
   const pendingValidation = dedupeProactiveMemories(
