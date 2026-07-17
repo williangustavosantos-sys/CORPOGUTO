@@ -708,6 +708,15 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, 
           setErrorMsg(copy.waitingForMission)
           return
         }
+        // O refresh soberano feito pelo retry pode remover a missão e disparar
+        // este efeito novamente enquanto o GET da dieta ainda está em voo.
+        // Nesse caso, a ausência atual da missão prevalece sobre um erro antigo
+        // do plano e evita que a tela volte indevidamente para "regenerar".
+        if (!isMissionReadyForDiet(latestMemoryRef.current)) {
+          setStatus("waiting_mission")
+          setErrorMsg(copy.waitingForMission)
+          return
+        }
         setStatus("error")
         if (!isMissingProfileError(err)) {
           setErrorMsg(getDietErrorMessage(err, copy))
