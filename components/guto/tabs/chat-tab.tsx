@@ -49,6 +49,7 @@ import type { GutoVitalStateResult } from "@/lib/guto-vital-state"
 
 import { GutoAvatarController } from "../guto-avatar-controller"
 import { getLanguage, translations } from "../translations"
+import { persistXpRewardBeforeArrival } from "@/lib/guto-arrival"
 import type { MissionExercise } from "../view-models"
 import { gutoAudio } from "@/lib/audio-haptics"
 import { firstRealGutoName, hasCompleteGutoCalibration } from "@/lib/guto-profile"
@@ -74,7 +75,7 @@ interface ChatTabProps {
   vitalState?: GutoVitalStateResult
   initialXpGranted?: boolean
   initialXpRewardSeen?: boolean
-  onXpRewardSeen?: () => void
+  onXpRewardSeen?: () => void | Promise<void>
   memory?: GutoMemory | null
   onProfileUpdate?: (field: string, value: string | number) => Promise<void>
   onMemoryPatch?: (patch: Partial<GutoMemory>) => void
@@ -1121,11 +1122,10 @@ export function ChatTab({
 
   // Após o card +100 XP: a chegada passa pelo backend, que decide se precisa
   // abrir contexto semanal antes de missão.
-  const dismissInitialXpCard = useCallback(() => {
+  const dismissInitialXpCard = useCallback(async () => {
     setShowInitialXpCard(false)
     writeInitialXpRewardSeen(userId)
-    onXpRewardSeen?.()
-    void checkProactiveMessage(true)
+    await persistXpRewardBeforeArrival(onXpRewardSeen, () => checkProactiveMessage(true))
   }, [checkProactiveMessage, onXpRewardSeen, userId])
 
   useEffect(() => {
