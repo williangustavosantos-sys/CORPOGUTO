@@ -21,7 +21,7 @@ import { LanguageScreen } from "./screens/language-screen"
 import type { MissionExercise } from "./view-models"
 import { WorkoutValidationFlow } from "./validation/workout-validation-flow"
 import { getApiErrorMessage } from "@/lib/api/client"
-import { acceptGutoConsent, getGutoMemory, saveGutoMemory, trackGutoEvent, validateGutoName, type DietFood, type DietMeal, type GutoMemory, type GutoNameValidation, type GutoTelemetryEvent, type GutoWorkoutPlan } from "@/lib/api/guto"
+import { acceptGutoConsent, generateDietPlan, getGutoMemory, saveGutoMemory, trackGutoEvent, validateGutoName, type DietFood, type DietMeal, type DietPlan, type GutoMemory, type GutoNameValidation, type GutoTelemetryEvent, type GutoWorkoutPlan } from "@/lib/api/guto"
 import { useAuth } from "@/components/auth-provider"
 import { getInvite, claimInvite, logout, deleteOwnAccount, revokeConsent, type InvitePreview } from "@/lib/api/auth"
 import type { EvolutionStage, SupportedLanguage } from "@/types/contract"
@@ -567,6 +567,16 @@ function hasStoredName(profile?: StoredProfile | null) {
 
 function hasMemoryName(memory?: GutoMemory | null) {
   return Boolean(firstRealGutoName(memory?.name))
+}
+
+function sameMemoryPatchValue(current: unknown, incoming: unknown): boolean {
+  if (Object.is(current, incoming)) return true
+  if (!current || !incoming || typeof current !== "object" || typeof incoming !== "object") return false
+  try {
+    return JSON.stringify(current) === JSON.stringify(incoming)
+  } catch {
+    return false
+  }
 }
 
 function normalizeCountryLookup(value: string) {
@@ -2192,6 +2202,45 @@ export function GutoApp({
     formatGutoName(settingsNameDraft) !== userLabel &&
     !isValidatingName
 
+  const mergeMemoryPatch = useCallback((patch: Partial<GutoMemory>) => {
+    setMemory((previous) => {
+      if (!previous) return previous
+      const changed = (Object.entries(patch) as Array<[keyof GutoMemory, unknown]>)
+        .some(([key, value]) => !sameMemoryPatchValue(previous[key], value))
+      return changed ? { ...previous, ...patch } : previous
+    })
+  }, [])
+
+  // Chat e Dieta são chunks clientes diferentes, mas o GutoApp permanece
+  // montado durante a troca de abas. Centralizar aqui a Promise em voo garante
+  // que a missão recém-confirmada gere uma única dieta, mesmo quando a aba
+  // Dieta abre enquanto a chamada iniciada pelo Chat ainda está pendente.
+  const dietGenerationInFlightRef = useRef(new Map<string, Promise<DietPlan>>())
+  const requestDietGeneration = useCallback((language: SupportedLanguage) => {
+    // O estado espelhado gutoUserId começa como "guest" enquanto o AuthProvider
+    // hidrata. Para a dieta, a identidade autenticada já disponível é a chave
+    // soberana; assim Chat e Dieta não abrem flights diferentes durante o boot.
+    const generationUserId = user?.userId || gutoUserId
+    const key = `${generationUserId}:${language}`
+    const activeRequest = dietGenerationInFlightRef.current.get(key)
+    if (activeRequest) return activeRequest
+
+    const request = generateDietPlan(language, generationUserId)
+    dietGenerationInFlightRef.current.set(key, request)
+    void request.then(() => {
+      window.setTimeout(() => {
+        if (dietGenerationInFlightRef.current.get(key) === request) {
+          dietGenerationInFlightRef.current.delete(key)
+        }
+      }, 1_500)
+    }, () => {
+      if (dietGenerationInFlightRef.current.get(key) === request) {
+        dietGenerationInFlightRef.current.delete(key)
+      }
+    })
+    return request
+  }, [gutoUserId, user?.userId])
+
   const chatContent = useMemo(() => (
     <ChatTab
       key={`chat-${gutoUserId}-${selectedLanguage}`}
@@ -2217,7 +2266,8 @@ export function GutoApp({
         }
       }}
       onProfileUpdate={updateUserProfileField}
-      onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
+      onMemoryPatch={mergeMemoryPatch}
+      onGenerateDiet={requestDietGeneration}
       onChangeLanguage={(nextLang) => {
         setSelectedLanguage(nextLang)
         writeConfirmedLanguageStorage(nextLang)
@@ -2231,7 +2281,7 @@ export function GutoApp({
       isAvatarActive={activeTab === "guto" && !isKeyboardOpen}
       isKeyboardOpen={isKeyboardOpen}
     />
-  ), [activeTab, evolution, gutoUserId, isKeyboardOpen, localizedWorkoutPlan, vitalState, memory, pendingExerciseQuestion, pendingFoodQuestion, persistMemory, persistProfile, selectedLanguage, updateUserProfileField, userLabel])
+  ), [activeTab, evolution, gutoUserId, isKeyboardOpen, localizedWorkoutPlan, vitalState, memory, mergeMemoryPatch, pendingExerciseQuestion, pendingFoodQuestion, persistMemory, persistProfile, requestDietGeneration, selectedLanguage, updateUserProfileField, userLabel])
 
   const validationLocationMode = useMemo(
     () =>
@@ -2256,7 +2306,7 @@ export function GutoApp({
             workoutPlan={localizedWorkoutPlan}
             currentEvolution={evolution}
             validationHistory={memory?.validationHistory}
-            onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
+            onMemoryPatch={mergeMemoryPatch}
             onOpenChat={() => setActiveTab("guto")}
           />
         )
@@ -2305,13 +2355,14 @@ export function GutoApp({
             language={selectedLanguage}
             onFoodDoubt={handleFoodDoubt}
             memory={memory}
-            onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
+            onMemoryPatch={mergeMemoryPatch}
+            onGenerateDiet={requestDietGeneration}
           />
         )
       default:
         return null
     }
-  }, [activeTab, arenaRefreshKey, evolution, gutoUserId, handleAdaptedMissionComplete, handleExerciseQuestion, handleFoodDoubt, handleMissionComplete, localizedWorkoutPlan, memory, selectedLanguage, userLabel, workoutMissingFields])
+  }, [activeTab, arenaRefreshKey, evolution, gutoUserId, handleAdaptedMissionComplete, handleExerciseQuestion, handleFoodDoubt, handleMissionComplete, localizedWorkoutPlan, memory, mergeMemoryPatch, requestDietGeneration, selectedLanguage, userLabel, workoutMissingFields])
 
   if (authLoading || !isHydrated || (user && user.role !== "student")) {
     return (
