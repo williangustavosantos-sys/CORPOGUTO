@@ -462,6 +462,10 @@ export async function validateGutoName(name: string, userId?: string) {
   })
 }
 
+// A calibragem resolve país, patologia e restrição no backend antes de gravar.
+// Em cold start essa operação legítima ultrapassa o teto genérico de 15 s.
+export const GUTO_MEMORY_SAVE_TIMEOUT_MS = 60_000
+
 export async function saveGutoMemory(payload: {
   userId?: string
   name?: string
@@ -490,6 +494,7 @@ export async function saveGutoMemory(payload: {
 }) {
   return apiRequest<GutoMemory>("/guto/memory", {
     method: "POST",
+    timeoutMs: GUTO_MEMORY_SAVE_TIMEOUT_MS,
     body: JSON.stringify(payload),
   })
 }
