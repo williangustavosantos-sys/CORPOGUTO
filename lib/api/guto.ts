@@ -853,6 +853,7 @@ export async function extractProactivityEvents(
       {
         method: "POST",
         suppressAuthRedirect: true,
+        timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
         body: JSON.stringify({ conversationText, language }),
       }
     )
@@ -871,6 +872,7 @@ export async function openWeeklyConversation(): Promise<void> {
     await apiRequest("/guto/proactivity/open-weekly", {
       method: "POST",
       suppressAuthRedirect: true,
+      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({}),
     })
   } catch {
@@ -894,6 +896,7 @@ export async function getProactiveMemories(): Promise<ProactiveMemory[]> {
 }
 
 const failedProactivityAction: GutoProactivityActionResult = { ok: false }
+export const GUTO_PROACTIVITY_ACTION_TIMEOUT_MS = 60_000
 
 export async function confirmProactiveMemory(
   memoryId: string,
@@ -902,6 +905,7 @@ export async function confirmProactiveMemory(
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/confirm", {
       method: "POST",
+      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId, ...(typeof trainingAdapted === "boolean" ? { trainingAdapted } : {}) }),
     })
     return result
@@ -917,6 +921,7 @@ export async function discardProactiveMemory(
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/discard", {
       method: "POST",
+      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId, confirmedByUser }),
     })
     return result
@@ -929,6 +934,7 @@ export async function changeProactiveMemoryDate(memoryId: string): Promise<GutoP
   try {
     return await apiRequest<GutoProactivityActionResult>("/guto/proactivity/change-date", {
       method: "POST",
+      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId }),
     })
   } catch {
@@ -943,6 +949,7 @@ export async function updateProactiveMemory(
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/update", {
       method: "POST",
+      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId, patch }),
     })
     return result
@@ -958,6 +965,7 @@ export async function validateProactiveMemory(
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/validate", {
       method: "POST",
+      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId, outcome }),
     })
     return result
@@ -970,6 +978,7 @@ export async function requestDiscardProactiveMemory(memoryId: string): Promise<G
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/request-discard", {
       method: "POST",
+      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId }),
     })
     return result
@@ -982,6 +991,7 @@ export async function cancelDiscardRequest(memoryId: string): Promise<GutoProact
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/cancel-discard-request", {
       method: "POST",
+      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId }),
     })
     return result
