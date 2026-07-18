@@ -259,6 +259,7 @@ export interface GutoNameValidation {
 export interface GutoMemory {
   userId: string
   name: string
+  sovereignNameConfirmedAt?: string
   language: SupportedLanguage
   initialXpGranted: boolean
   totalXp: number
@@ -490,6 +491,7 @@ export async function saveGutoMemory(payload: {
   weightKg?: number
   foodRestrictions?: string
   confirmedName?: boolean
+  sovereignNameConfirmed?: boolean
   initialXpRewardSeen?: boolean
   lastWorkoutPlan?: GutoWorkoutPlan | null
 }) {
