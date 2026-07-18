@@ -2210,10 +2210,8 @@ export function GutoApp({
     })
   }, [])
 
-  // Chat e Dieta são chunks clientes diferentes, mas o GutoApp permanece
-  // montado durante a troca de abas. Centralizar aqui a Promise em voo garante
-  // que a missão recém-confirmada gere uma única dieta, mesmo quando a aba
-  // Dieta abre enquanto a chamada iniciada pelo Chat ainda está pendente.
+  // A geração manual/regeração da aba Dieta é deduplicada aqui. O bootstrap
+  // oficial pós-pacto acontece no backend e não passa por esta função.
   const dietGenerationInFlightRef = useRef(new Map<string, Promise<DietPlan>>())
   const requestDietGeneration = useCallback((language: SupportedLanguage) => {
     // O estado espelhado gutoUserId começa como "guest" enquanto o AuthProvider
@@ -2266,7 +2264,6 @@ export function GutoApp({
       }}
       onProfileUpdate={updateUserProfileField}
       onMemoryPatch={mergeMemoryPatch}
-      onGenerateDiet={requestDietGeneration}
       onChangeLanguage={(nextLang) => {
         setSelectedLanguage(nextLang)
         writeConfirmedLanguageStorage(nextLang)
@@ -2280,7 +2277,7 @@ export function GutoApp({
       isAvatarActive={activeTab === "guto" && !isKeyboardOpen}
       isKeyboardOpen={isKeyboardOpen}
     />
-  ), [activeTab, evolution, gutoUserId, isKeyboardOpen, localizedWorkoutPlan, vitalState, memory, mergeMemoryPatch, pendingExerciseQuestion, pendingFoodQuestion, persistMemory, persistProfile, requestDietGeneration, selectedLanguage, updateUserProfileField, userLabel])
+  ), [activeTab, evolution, gutoUserId, isKeyboardOpen, localizedWorkoutPlan, vitalState, memory, mergeMemoryPatch, pendingExerciseQuestion, pendingFoodQuestion, persistMemory, persistProfile, selectedLanguage, updateUserProfileField, userLabel])
 
   const validationLocationMode = useMemo(
     () =>
