@@ -639,10 +639,15 @@ export async function getArenaMe(userId: string) {
 
 // ─── Diet API ─────────────────────────────────────────────────────────────────
 
+export const GUTO_DIET_READ_TIMEOUT_MS = 60_000
+
 export async function getDietPlan() {
   try {
     return await apiRequest<DietPlan>(`/guto/diet`, {
       method: "GET",
+      // A cold sovereign backend can exceed the generic 15 s client ceiling.
+      // Keep the read alive so opening Dieta does not create an aborted request.
+      timeoutMs: GUTO_DIET_READ_TIMEOUT_MS,
     })
   } catch (err) {
     if (
