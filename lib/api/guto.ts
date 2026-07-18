@@ -890,11 +890,17 @@ export async function openWeeklyConversation(): Promise<void> {
 /**
  * Returns active proactive memories for the current user.
  */
+export const GUTO_PROACTIVITY_READ_TIMEOUT_MS = 60_000
+
 export async function getProactiveMemories(): Promise<ProactiveMemory[]> {
   try {
     const result = await apiRequest<{ memories: ProactiveMemory[] }>(
       "/guto/proactivity/memories",
-      { method: "GET", suppressAuthRedirect: true }
+      {
+        method: "GET",
+        suppressAuthRedirect: true,
+        timeoutMs: GUTO_PROACTIVITY_READ_TIMEOUT_MS,
+      }
     )
     return result.memories ?? []
   } catch {
