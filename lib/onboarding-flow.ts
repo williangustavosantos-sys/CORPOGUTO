@@ -19,3 +19,11 @@ export function hasDurableSovereignNameConfirmation(
     memory?.initialXpGranted
   )
 }
+
+export function resolveDurableCommittedName(
+  resolvedName: string,
+  profile?: { namingConfirmed?: boolean; onboardingComplete?: boolean } | null,
+  memory?: { sovereignNameConfirmedAt?: string; initialXpGranted?: boolean } | null,
+): string {
+  return hasDurableSovereignNameConfirmation(profile, memory) ? resolvedName : ""
+}
