@@ -45,6 +45,7 @@ import {
 } from "@/lib/guto-profile"
 import { getWorkoutMissingFields, localizeGutoWorkoutPlan } from "@/lib/workout-plan"
 import { resolveWorkoutValidationLocationMode } from "@/lib/workout-location"
+import { hasDurableSovereignNameConfirmation, stageAfterInviteClaim } from "@/lib/onboarding-flow"
 
 type AppStage = "intro" | "language" | "invite_claim" | "consent" | "naming" | "calibration" | "pact" | "system" | "settings"
 type SettingsMode = "menu" | "language" | "name" | "data" | "profile" | "goal" | "location" | "pathology" | "physicaldata" | "residence" | "food_restrictions" | "privacy"
@@ -666,9 +667,7 @@ function resolveAuthenticatedStage(
   // real. Nome só de admin (preset do convite), sem confirmação nem pacto, NÃO
   // conta — preserva a regra do Nome Soberano.
   const hasRealName = hasStoredName(profile) || hasMemoryName(memory)
-  const namingConfirmed = Boolean(
-    profile?.namingConfirmed || profile?.onboardingComplete || pactDoneBackend
-  )
+  const namingConfirmed = hasDurableSovereignNameConfirmation(profile, memory)
   if (!namingConfirmed || !hasRealName) {
     return "naming"
   }
@@ -1455,7 +1454,7 @@ export function GutoApp({
         meta: { nameLength: normalizedName.length, language: selectedLanguage },
       })
       persistProfile({ userName: normalizedName, language: selectedLanguage, onboardingComplete: false, namingConfirmed: true })
-      persistMemory({ name: normalizedName, confirmedName, language: selectedLanguage })
+      persistMemory({ name: normalizedName, confirmedName, sovereignNameConfirmed: true, language: selectedLanguage })
     },
     [effectRegistry, persistMemory, persistProfile, selectedLanguage]
   )
@@ -1699,7 +1698,7 @@ export function GutoApp({
       const finalName = formatGutoName(validation.normalized)
       setNameGate(null)
       setProfileSaveError(null)
-      const updated = await persistMemory({ name: finalName, confirmedName }, { optimistic: false })
+      const updated = await persistMemory({ name: finalName, confirmedName, sovereignNameConfirmed: true }, { optimistic: false })
       if (!updated) {
         gutoAudio.playGutoFeedback("error")
         setProfileSaveError(stageCopy[selectedLanguage].profileSaveError)
@@ -2139,7 +2138,7 @@ export function GutoApp({
             onboardingComplete: false,
           }))
         }
-        setStage("naming")
+        setStage(stageAfterInviteClaim())
         router.replace("/")
       }, 2000)
     } catch (err: unknown) {
