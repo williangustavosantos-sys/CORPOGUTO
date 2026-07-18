@@ -35,7 +35,6 @@ const dietCopy = {
     lockedPlan: "BLOQUEADA",
     emptyTitle: "Dieta ainda não gerada",
     emptyBody: "Complete seu perfil com altura, peso e país para o GUTO montar seu plano.",
-    waitingForMission: "A dieta nasce depois da primeira missão. Volte ao GUTO para ele fechar teu treino primeiro.",
     coachDietTitle: "DIETA DO COACH",
     coachDietBadge: "DEFINIDA PELO COACH",
     coachBreakfast: "Café da manhã",
@@ -80,7 +79,6 @@ const dietCopy = {
     lockedPlan: "LOCKED",
     emptyTitle: "Diet not generated yet",
     emptyBody: "Complete your profile with height, weight and country so GUTO can build your plan.",
-    waitingForMission: "Your diet starts after the first mission. Go back to GUTO so he can finish your workout first.",
     coachDietTitle: "COACH DIET",
     coachDietBadge: "SET BY COACH",
     coachBreakfast: "Breakfast",
@@ -125,7 +123,6 @@ const dietCopy = {
     lockedPlan: "BLOCCATA",
     emptyTitle: "Dieta non ancora creata",
     emptyBody: "Completa il profilo con altezza, peso e paese per far creare la dieta a GUTO.",
-    waitingForMission: "La dieta nasce dopo la prima missione. Torna da GUTO per chiudere prima l'allenamento.",
     coachDietTitle: "DIETA DEL COACH",
     coachDietBadge: "DEFINITA DAL COACH",
     coachBreakfast: "Colazione",
@@ -528,7 +525,7 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, 
   const copy = dietCopy[validLang]
 
   const [plan, setPlan] = useState<DietPlan | null>(null)
-  const [status, setStatus] = useState<"loading" | "generating" | "waiting_mission" | "error" | "ready">("loading")
+  const [status, setStatus] = useState<"loading" | "generating" | "error" | "ready">("loading")
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
   const latestMemoryRef = useRef(memory)
@@ -557,8 +554,6 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, 
           status: memory.resolvedFields.foodRestriction.status,
         }
       : null,
-    workoutPlanScheduledFor: memory?.lastWorkoutPlan?.scheduledFor ?? null,
-    weeklyWorkoutUpdatedAt: memory?.weeklyWorkoutPlan?.updatedAt ?? null,
     dietGenerationStatus: memory?.dietGenerationStatus ?? null,
   })
 
@@ -589,20 +584,8 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, 
     )
   }, [])
 
-  const isMissionReadyForDiet = useCallback((profile: typeof memory): boolean => {
-    if (!profile) return false
-    const weeklyMissionReady = Boolean(
-      profile.weeklyWorkoutPlan?.days &&
-      Object.values(profile.weeklyWorkoutPlan.days).some((day) => Boolean(day?.exercises?.length))
-    )
-    return Boolean(
-      profile.lastWorkoutPlan?.exercises?.length ||
-      weeklyMissionReady
-    )
-  }, [])
-
   const loadFreshMemoryForDiet = useCallback(async (force = false) => {
-    if (!force && isProfileCompleteFor(latestMemoryRef.current) && isMissionReadyForDiet(latestMemoryRef.current)) {
+    if (!force && isProfileCompleteFor(latestMemoryRef.current)) {
       return latestMemoryRef.current
     }
     try {
@@ -619,7 +602,7 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, 
     } catch {
       return latestMemoryRef.current
     }
-  }, [isMissionReadyForDiet, isProfileCompleteFor, onMemoryPatch])
+  }, [isProfileCompleteFor, onMemoryPatch])
 
   useEffect(() => {
     if (!userId) return
@@ -662,20 +645,6 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, 
         // português num app italiano. Plano do coach/manual é preservado.
         if (fetched && isDietLanguageStale(fetched, validLang)) fetched = null
 
-        // Uma dieta IA só é apresentável depois de uma missão persistida. Isso
-        // também neutraliza o estado legado do bug original (dieta existente,
-        // MISSÃO vazia) sem esconder planos soberanos do coach/manual.
-        if (fetched && isAdjustableDietPlan(fetched)) {
-          const profileForExistingDiet = await loadFreshMemoryForDiet()
-          if (cancelled) return
-          if (!isMissionReadyForDiet(profileForExistingDiet)) {
-            setPlan(null)
-            setStatus("waiting_mission")
-            setErrorMsg(copy.waitingForMission)
-            return
-          }
-        }
-
         if (!fetched) {
           const profileForDiet = await loadFreshMemoryForDiet(true)
           if (cancelled) return
@@ -685,15 +654,13 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, 
             setErrorMsg(null)
             return
           }
-          if (!isMissionReadyForDiet(profileForDiet)) {
-            setPlan(null)
-            setStatus("waiting_mission")
-            setErrorMsg(copy.waitingForMission)
-            return
-          }
-          setStatus("generating")
-          fetched = await onGenerateDiet(validLang)
-          if (cancelled) return
+          // Opening this tab is read-only. The official post-pact transaction
+          // must already have persisted the diet; generating here would hide a
+          // broken onboarding flow. Manual retry remains available below.
+          setPlan(null)
+          setStatus("error")
+          setErrorMsg(null)
+          return
         }
 
         setPlan(sanitizeDietPlan(fetched, latestMemoryRef.current))
@@ -701,22 +668,6 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, 
       } catch (err: unknown) {
         if (cancelled) return
         setPlan(null)
-        if (getDietPolicyCode(err) === "MISSION_REQUIRED_FOR_DIET") {
-          await loadFreshMemoryForDiet(true)
-          if (cancelled) return
-          setStatus("waiting_mission")
-          setErrorMsg(copy.waitingForMission)
-          return
-        }
-        // O refresh soberano feito pelo retry pode remover a missão e disparar
-        // este efeito novamente enquanto o GET da dieta ainda está em voo.
-        // Nesse caso, a ausência atual da missão prevalece sobre um erro antigo
-        // do plano e evita que a tela volte indevidamente para "regenerar".
-        if (!isMissionReadyForDiet(latestMemoryRef.current)) {
-          setStatus("waiting_mission")
-          setErrorMsg(copy.waitingForMission)
-          return
-        }
         setStatus("error")
         if (!isMissingProfileError(err)) {
           setErrorMsg(getDietErrorMessage(err, copy))
@@ -731,7 +682,7 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, 
       cancelled = true
       clearTimeout(hardTimeout)
     }
-  }, [userId, validLang, dietProfileKey, copy, isMissionReadyForDiet, isProfileCompleteFor, loadFreshMemoryForDiet, onGenerateDiet, todayCoachDiet])
+  }, [userId, validLang, dietProfileKey, copy, isProfileCompleteFor, loadFreshMemoryForDiet, todayCoachDiet])
 
   const handleRetry = async () => {
     if (retrying) return
@@ -749,23 +700,10 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, 
         setErrorMsg(null)
         return
       }
-      if (!isMissionReadyForDiet(profileForDiet)) {
-        setPlan(null)
-        setStatus("waiting_mission")
-        setErrorMsg(copy.waitingForMission)
-        return
-      }
       const newPlan = await onGenerateDiet(validLang)
       setPlan(sanitizeDietPlan(newPlan, latestMemoryRef.current))
       setStatus("ready")
     } catch (err: unknown) {
-      if (getDietPolicyCode(err) === "MISSION_REQUIRED_FOR_DIET") {
-        await loadFreshMemoryForDiet(true)
-        setPlan(null)
-        setStatus("waiting_mission")
-        setErrorMsg(copy.waitingForMission)
-        return
-      }
       setStatus("error")
       setErrorMsg(getDietErrorMessage(err, copy))
     } finally {
