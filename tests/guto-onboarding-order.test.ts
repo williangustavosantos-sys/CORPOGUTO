@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { hasDurableSovereignNameConfirmation, stageAfterInviteClaim } from "../lib/onboarding-flow"
+import { hasDurableSovereignNameConfirmation, resolveDurableCommittedName, stageAfterInviteClaim } from "../lib/onboarding-flow"
 
 describe("GUTO onboarding order", () => {
   it("a fresh invite enters consent before naming", () => {
@@ -19,5 +19,15 @@ describe("GUTO onboarding order", () => {
 
   it("o nome sugerido pelo convite não conta como confirmação", () => {
     assert.equal(hasDurableSovereignNameConfirmation(null, { initialXpGranted: false }), false)
+  })
+
+  it("reidrata o nome confirmado pelo backend em um browser limpo", () => {
+    assert.equal(
+      resolveDurableCommittedName("AuditorPT", null, {
+        sovereignNameConfirmedAt: "2026-07-18T12:00:00.000Z",
+        initialXpGranted: true,
+      }),
+      "AuditorPT",
+    )
   })
 })

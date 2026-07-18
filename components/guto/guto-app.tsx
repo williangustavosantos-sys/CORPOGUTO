@@ -45,7 +45,7 @@ import {
 } from "@/lib/guto-profile"
 import { getWorkoutMissingFields, localizeGutoWorkoutPlan } from "@/lib/workout-plan"
 import { resolveWorkoutValidationLocationMode } from "@/lib/workout-location"
-import { hasDurableSovereignNameConfirmation, stageAfterInviteClaim } from "@/lib/onboarding-flow"
+import { hasDurableSovereignNameConfirmation, resolveDurableCommittedName, stageAfterInviteClaim } from "@/lib/onboarding-flow"
 
 type AppStage = "intro" | "language" | "invite_claim" | "consent" | "naming" | "calibration" | "pact" | "system" | "settings"
 type SettingsMode = "menu" | "language" | "name" | "data" | "profile" | "goal" | "location" | "pathology" | "physicaldata" | "residence" | "food_restrictions" | "privacy"
@@ -1132,14 +1132,14 @@ export function GutoApp({
           console.info("[GUTO_LANGUAGE] applied in private app:", persistedLanguage)
         }
 
-        const hasConfirmedName = Boolean(stored?.namingConfirmed || stored?.onboardingComplete)
+        const hasConfirmedName = hasDurableSovereignNameConfirmation(stored, loadedMemory)
         const onboardingDraftName = hasConfirmedName ? resolvedName : onboardingSuggestedName(resolvedName)
 
         // Only set committedName (used in the chat header) if the user has already
         // confirmed their own name. If they're still at the naming screen, only
         // pre-fill draftName so the presetName from the invite does not leak into the UI.
         setDraftName(onboardingDraftName)
-        setCommittedName(hasConfirmedName ? resolvedName : "")
+        setCommittedName(resolveDurableCommittedName(resolvedName, stored, loadedMemory))
 
         persistProfile({
           language: persistedLanguage,
