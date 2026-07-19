@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test'
+import { test, expect, Page, Route } from '@playwright/test'
 import path from 'path'
 import fs from 'fs'
 
@@ -174,6 +174,26 @@ const jsonBody = (body: unknown) => ({
   body: JSON.stringify(body),
 })
 
+function correlatedGutoBody(route: Route, body: Record<string, unknown>) {
+  const request = route.request().postDataJSON() as {
+    turnId?: string
+    requestId?: string
+    contextId?: string | null
+    contextVersion?: number | null
+    activeContextType?: 'workout' | 'diet' | null
+    activeItemId?: string | null
+  }
+  return jsonBody({
+    ...body,
+    turnId: request.turnId,
+    requestId: request.requestId,
+    contextId: request.contextId ?? null,
+    contextVersion: request.contextVersion ?? null,
+    activeContextType: request.activeContextType ?? null,
+    activeItemId: request.activeItemId ?? null,
+  })
+}
+
 function toDateKey(date: Date) {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -220,7 +240,7 @@ async function setupApiMocks(page: Page) {
   // só intercepta POST e não engole /guto/memory, /guto/diet, etc.
   await onPath('/guto', (route) => {
     if (route.request().method() === 'POST') {
-      return route.fulfill(jsonBody({
+      return route.fulfill(correlatedGutoBody(route, {
         fala: 'Boa, QA! Treino montado e dieta calibrada. Bora, dupla!',
         acao: 'none',
         avatarEmotion: 'default',
@@ -1160,7 +1180,7 @@ test.describe('GUTO – Fluxos críticos', () => {
       const body = route.request().postDataJSON() as { input?: string }
       seenInputs.push(body.input || '')
       if (seenInputs.length === 1) {
-        return route.fulfill(jsonBody({
+        return route.fulfill(correlatedGutoBody(route, {
           fala: 'Consigo adaptar para 20-30 minutos. Você consegue treinar?',
           acao: 'none',
           avatarEmotion: 'alert',
@@ -1173,7 +1193,7 @@ test.describe('GUTO – Fluxos críticos', () => {
         }))
       }
       cardPending = true
-      return route.fulfill(jsonBody({
+      return route.fulfill(correlatedGutoBody(route, {
         fala: 'Confirma no card e eu já sigo organizando tua semana.',
         acao: 'none',
         avatarEmotion: 'default',
