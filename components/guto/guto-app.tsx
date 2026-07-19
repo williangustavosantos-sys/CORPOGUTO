@@ -27,6 +27,7 @@ import { getInvite, claimInvite, logout, deleteOwnAccount, revokeConsent, type I
 import type { EvolutionStage, SupportedLanguage } from "@/types/contract"
 import { resolveGutoEvolutionStage } from "@/lib/guto-evolution"
 import { getGutoVitalState } from "@/lib/guto-vital-state"
+import { commitPactOnceAndRecover, recoverDurablePostPactArtifacts } from "@/lib/guto-pact"
 import { isPushSupported, getCurrentSubscription, subscribePush, unsubscribePush } from "@/lib/push-client"
 import { createPortalSession, getBillingStatus, type BillingStatus } from "@/lib/api/billing"
 import { translations } from "./translations"
@@ -82,6 +83,7 @@ interface NameGate {
 }
 
 type GutoMemoryPayload = Parameters<typeof saveGutoMemory>[0]
+type PactFlowState = "idle" | "holding" | "confirming" | "generating_artifacts" | "ready" | "recoverable_error"
 
 const STORAGE_KEY = "guto-white-lab-profile"
 const STORAGE_VERSION = 2  // bump aqui para forçar reset em todos os dispositivos
@@ -717,6 +719,7 @@ export function GutoApp({
   const [rotatingLanguage, setRotatingLanguage] = useState(false)
   const [isHoldingPact, setIsHoldingPact] = useState(false)
   const [pactProgress, setPactProgress] = useState(0)
+  const [pactFlowState, setPactFlowState] = useState<PactFlowState>("idle")
   const [whiteout, setWhiteout] = useState(false)
   const [introNeedsActivation, setIntroNeedsActivation] = useState(true)
   const [introPlaybackState, setIntroPlaybackState] = useState<IntroPlaybackState>("idle")
@@ -769,6 +772,7 @@ export function GutoApp({
   const introStartedRef = useRef(false)
   const introStartedAtRef = useRef(0)
   const pactCompleteRef = useRef(false)
+  const pactFinalizedRef = useRef(false)
   const portalVideoRef = useRef<HTMLVideoElement | null>(null)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const memoryRef = useRef<GutoMemory | null>(null)
@@ -1216,30 +1220,10 @@ export function GutoApp({
     }
   }, [clearIntroSafetyTimer, stage])
 
-  const startSystem = useCallback(
-    async (finalName: string, finalLanguage: SupportedLanguage) => {
-      if (pactCompleteRef.current) return
-      pactCompleteRef.current = true
-      gutoAudio.stopGutoSound("hold_charge")
-      setProfileSaveError(null)
-
-      const updated = await persistMemory({
-        name: finalName,
-        language: finalLanguage,
-        trainedToday: false,
-        xpEvent: "grant_initial_xp",
-      }, { optimistic: false })
-
-      if (!updated) {
-        pactCompleteRef.current = false
-        setPactProgress(0)
-        setIsHoldingPact(false)
-        setWhiteout(false)
-        gutoAudio.playGutoFeedback("error")
-        setProfileSaveError(stageCopy[finalLanguage].profileSaveError)
-        return
-      }
-
+  const finalizeReadyPact = useCallback((updated: GutoMemory, finalName: string, finalLanguage: SupportedLanguage) => {
+      if (pactFinalizedRef.current) return
+      pactFinalizedRef.current = true
+      setPactFlowState("ready")
       gutoAudio.playGutoFeedback("hold_complete")
       effectRegistry.emit("whiteout")
       persistProfile({
@@ -1262,13 +1246,57 @@ export function GutoApp({
         setWhiteout(false)
         setPactProgress(0)
       }, 860)
-      schedule(() => {
-        void getGutoMemory().then((fresh) => {
-          if (fresh) setMemory(fresh)
-        }).catch(() => {})
-      }, 1200)
+    }, [effectRegistry, persistProfile, schedule, trackBehaviorEvent])
+
+  const recoverPostPact = useCallback(async (
+    finalName: string,
+    finalLanguage: SupportedLanguage,
+    maxAttempts = 45,
+  ) => {
+    setPactFlowState("generating_artifacts")
+    const fresh = await recoverDurablePostPactArtifacts({ read: getGutoMemory, attempts: maxAttempts })
+    if (fresh) {
+      finalizeReadyPact(fresh, finalName, finalLanguage)
+      return true
+    }
+    setPactFlowState("recoverable_error")
+    setIsHoldingPact(false)
+    setWhiteout(false)
+    gutoAudio.playGutoFeedback("error")
+    setProfileSaveError(stageCopy[finalLanguage].profileSaveError)
+    return false
+  }, [finalizeReadyPact])
+
+  const startSystem = useCallback(
+    async (finalName: string, finalLanguage: SupportedLanguage) => {
+      if (pactCompleteRef.current) return
+      pactCompleteRef.current = true
+      setPactFlowState("confirming")
+      gutoAudio.stopGutoSound("hold_charge")
+      setProfileSaveError(null)
+
+      const updated = await commitPactOnceAndRecover({
+        commit: () => persistMemory({
+          name: finalName,
+          language: finalLanguage,
+          trainedToday: false,
+          xpEvent: "grant_initial_xp",
+        }, { optimistic: false }),
+        read: getGutoMemory,
+        onPolling: () => setPactFlowState("generating_artifacts"),
+      })
+
+      if (updated) {
+        finalizeReadyPact(updated, finalName, finalLanguage)
+        return
+      }
+      setPactFlowState("recoverable_error")
+      setIsHoldingPact(false)
+      setWhiteout(false)
+      gutoAudio.playGutoFeedback("error")
+      setProfileSaveError(stageCopy[finalLanguage].profileSaveError)
     },
-    [effectRegistry, persistMemory, persistProfile, schedule, setMemory, trackBehaviorEvent]
+    [finalizeReadyPact, persistMemory]
   )
 
   const handleConsentAccepted = useCallback(async () => {
@@ -1446,6 +1474,8 @@ export function GutoApp({
       setNameGate(null)
       setCommittedName(normalizedName)
       pactCompleteRef.current = false
+      pactFinalizedRef.current = false
+      setPactFlowState("idle")
       setPactProgress(0)
       setIsHoldingPact(false)
       setWhiteout(false)
@@ -2007,15 +2037,6 @@ export function GutoApp({
       setPactProgress((current) => {
         const next = Math.min(current + HOLD_INCREMENT, 100)
         effectRegistry.emit("pact_hold_tick", { value: next })
-
-        if (next >= 100) {
-          clearPactInterval()
-          void startSystem(
-            committedName || formatGutoName(draftName || userName || ""),
-            selectedLanguage
-          )
-        }
-
         return next
       })
     }, HOLD_INTERVAL_MS)
@@ -2023,15 +2044,20 @@ export function GutoApp({
     return clearPactInterval
   }, [
     clearPactInterval,
-    committedName,
-    draftName,
     effectRegistry,
     isHoldingPact,
-    selectedLanguage,
     stage,
-    startSystem,
-    userName,
   ])
+
+  useEffect(() => {
+    if (stage !== "pact" || pactProgress < 100 || pactCompleteRef.current) return
+    clearPactInterval()
+    setIsHoldingPact(false)
+    void startSystem(
+      committedName || formatGutoName(draftName || userName || ""),
+      selectedLanguage
+    )
+  }, [clearPactInterval, committedName, draftName, pactProgress, selectedLanguage, stage, startSystem, userName])
 
   useEffect(() => {
     if (!user?.userId) return
@@ -2078,6 +2104,7 @@ export function GutoApp({
     gutoAudio.stopGutoSound('hold_charge')
     setIsHoldingPact(false)
     setPactProgress(0)
+    setPactFlowState("idle")
   }, [clearPactInterval, pactProgress, stage])
 
   // ── Invite claim flow ──────────────────────────────────────────────────────
@@ -2788,8 +2815,17 @@ export function GutoApp({
               <motion.button
                 type="button"
                 onPointerDown={() => {
+                  if (pactFlowState === "recoverable_error") {
+                    setProfileSaveError(null)
+                    void recoverPostPact(
+                      committedName || formatGutoName(draftName || userName || ""),
+                      selectedLanguage,
+                    )
+                    return
+                  }
                   if (isHoldingPact || pactCompleteRef.current) return
                   gutoAudio.playGutoFeedback("hold_charge")
+                  setPactFlowState("holding")
                   setIsHoldingPact(true)
                 }}
                 onPointerUp={stopHold}

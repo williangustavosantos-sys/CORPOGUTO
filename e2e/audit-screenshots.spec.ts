@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test'
+import { test, expect, Page, Route } from '@playwright/test'
 import path from 'path'
 import fs from 'fs'
 
@@ -138,6 +138,26 @@ const jsonBody = (body: unknown) => ({
   body: JSON.stringify(body),
 })
 
+function correlatedGutoBody(route: Route, body: Record<string, unknown>) {
+  const request = route.request().postDataJSON() as {
+    turnId?: string
+    requestId?: string
+    contextId?: string | null
+    contextVersion?: number | null
+    activeContextType?: 'workout' | 'diet' | null
+    activeItemId?: string | null
+  }
+  return jsonBody({
+    ...body,
+    turnId: request.turnId,
+    requestId: request.requestId,
+    contextId: request.contextId ?? null,
+    contextVersion: request.contextVersion ?? null,
+    activeContextType: request.activeContextType ?? null,
+    activeItemId: request.activeItemId ?? null,
+  })
+}
+
 async function setupApiMocks(page: Page) {
   // Casa pelo final do pathname (cobre `/auth/me` e `/api/guto/auth/me`).
   const onPath = (suffix: string, handler: Parameters<Page['route']>[1]) =>
@@ -181,7 +201,7 @@ async function setupApiMocks(page: Page) {
   // Playwright; só intercepta POST e não engole /guto/memory, /guto/diet, etc.
   await onPath('/guto', (route) => {
     if (route.request().method() === 'POST') {
-      return route.fulfill(jsonBody({ fala: 'E aí, Willian! Treino pronto pra hoje. Bora, dupla!', acao: 'none', avatarEmotion: 'default' }))
+      return route.fulfill(correlatedGutoBody(route, { fala: 'E aí, Willian! Treino pronto pra hoje. Bora, dupla!', acao: 'none', avatarEmotion: 'default' }))
     }
     return route.continue()
   })

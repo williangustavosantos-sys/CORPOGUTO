@@ -55,6 +55,7 @@ export type GutoTelemetryEvent =
   | "user_returned_next_day"
   | "calibration_completed"
   | "guto_online_session_event"
+  | "stale_context_response_discarded"
 
 export interface GutoWorkoutExercise {
   id: string
@@ -185,6 +186,36 @@ export interface ActiveConversationContext {
   updatedAt: string
 }
 
+export type ActiveContextType = "workout" | "diet"
+
+export interface ActiveContextItem {
+  id: string
+  name: string
+  position?: number
+  workoutId?: string
+  mealId?: string
+  mealName?: string
+  quantity?: string
+  nutritionalRole?: string
+  sets?: number
+  reps?: string
+  rest?: string
+}
+
+export interface ActiveContext {
+  id: string
+  version: number
+  type: ActiveContextType
+  sourceSurface: "mission" | "diet"
+  originalItem: ActiveContextItem
+  currentItem: ActiveContextItem
+  lastSuggestedItem?: ActiveContextItem | null
+  rejectedItems: ActiveContextItem[]
+  acceptedItem?: ActiveContextItem | null
+  createdAt: string
+  updatedAt: string
+}
+
 export interface SendGutoMessageRequest {
   profile: {
     name: string
@@ -201,6 +232,11 @@ export interface SendGutoMessageRequest {
   }[]
   expectedResponse?: GutoExpectedResponse | null
   turnId: string
+  requestId: string
+  contextId: string | null
+  contextVersion: number | null
+  activeContextType: ActiveContextType | null
+  activeItemId: string | null
 }
 
 export type ProactiveMemoryStage =
@@ -240,6 +276,13 @@ export interface GutoAtomicTurnDecision {
 
 export interface SendGutoMessageResponse {
   turnId?: string
+  requestId?: string
+  contextId?: string | null
+  contextVersion?: number | null
+  activeContextType?: ActiveContextType | null
+  activeItemId?: string | null
+  activeContext?: ActiveContext | null
+  discardedReason?: "stale_context"
   fala?: string
   acao?: GutoAction
   expectedResponse?: GutoExpectedResponse | null
@@ -301,6 +344,9 @@ export interface GutoMemory {
   }[]
   lastLimitationCheckAt?: string
   lastWorkoutPlan?: GutoWorkoutPlan | null
+  lastDietPlan?: DietPlan | null
+  activeContext?: ActiveContext | null
+  contextHistory?: ActiveContext[]
   proactiveMemories?: ProactiveMemory[]
   proactiveImpacts?: ProactiveImpact[]
   proactivePrompt?: ProactivePrompt | null
@@ -1050,4 +1096,12 @@ export async function clearActiveExercise(): Promise<void> {
   } catch {
     // silencioso.
   }
+}
+
+export async function setActiveContext(context: ActiveContext | null): Promise<ActiveContext | null> {
+  const result = await apiRequest<{ ok: true; activeContext: ActiveContext | null }>("/guto/active-context", {
+    method: "POST",
+    body: JSON.stringify({ context }),
+  })
+  return result.activeContext
 }

@@ -6,9 +6,9 @@ import { AnimatePresence, motion } from "framer-motion"
 import { Dumbbell, Loader2, Mic, Plane, Send, TrendingUp, UtensilsCrossed, Volume2, VolumeX } from "lucide-react"
 
 import { getApiErrorMessage } from "@/lib/api/client"
+import { isGutoResponseCorrelated } from "@/lib/guto-context-correlation"
 import {
   cancelDiscardRequest,
-  clearActiveExercise,
   confirmProactiveMemory,
   discardProactiveMemory,
   extractProactivityEvents,
@@ -16,13 +16,14 @@ import {
   getProactiveMemories,
   requestDiscardProactiveMemory,
   sendGutoMessage,
-  setActiveExercise,
+  setActiveContext,
   trackGutoEvent,
   updateProactiveMemory,
   validateProactiveMemory,
 } from "@/lib/api/guto"
 import type {
-  DietFood,
+  ActiveContext,
+  ActiveContextItem,
   DietMeal,
   GutoAvatarEmotion,
   GutoExpectedResponse,
@@ -142,6 +143,11 @@ interface StoredChatState {
 
 interface PendingChatTurn {
   turnId: string
+  requestId: string
+  contextId: string | null
+  contextVersion: number | null
+  activeContextType: "workout" | "diet" | null
+  activeItemId: string | null
   displayText: string
   modelInput: string
   language: SupportedLanguage
@@ -524,68 +530,30 @@ function writeStoredChatState(userId: string, state: StoredChatState) {
   } catch {}
 }
 
-function buildExerciseModelContext(
-  exercise: MissionExercise,
-  memory: GutoMemory | null | undefined,
-  language: SupportedLanguage,
-  workoutPlan?: GutoWorkoutPlan | null,
-): string {
-  const location = memory?.trainingLocation || memory?.preferredTrainingLocation || ""
-  const pathology = memory?.trainingPathology?.trim() || "none"
-  const planLine = workoutPlan
-    ? `Today's workout: "${workoutPlan.title || workoutPlan.focus}" (${workoutPlan.dateLabel}). Focus: ${workoutPlan.focus}. Session location: ${workoutPlan.locationMode || workoutPlan.location || location}. All exercises today: ${workoutPlan.exercises.map((item) => item.name).join(", ")}.`
-    : ""
-
-  return [
-    `[WORKOUT EXERCISE CONTEXT — language: ${language}]`,
-    `User opened chat from the "?" button on this exercise in today's mission.`,
-    `Exercise: "${exercise.name}" (canonical PT: ${exercise.canonicalNamePt || exercise.name}). Muscle group: ${exercise.muscleGroup}.`,
-    `Prescription: ${exercise.sets} sets × ${exercise.reps} reps, rest ${exercise.rest}.`,
-    `Execution cue: ${exercise.cue}. Coach note: ${exercise.note || "none"}.`,
-    planLine,
-    `User profile — training location: ${location || "from calibration"}. Goal: ${memory?.trainingGoal || "unknown"}. Level: ${memory?.trainingLevel || "unknown"}.`,
-    `Sex: ${memory?.biologicalSex || "?"}, age: ${memory?.userAge ?? "?"}, weight: ${memory?.weightKg ?? "?"}kg, height: ${memory?.heightCm ?? "?"}cm.`,
-    `Limitations/pathology: ${pathology}.`,
-    `Reply in ${language}. If user reports busy equipment, pain, or wants a swap, suggest an equivalent for THIS muscle/group and their location. Be direct, max 2–3 short sentences.`,
-  ]
-    .filter(Boolean)
-    .join(" ")
-}
-
-function buildDietModelContext(
-  food: DietFood,
-  meal: DietMeal,
-  memory: GutoMemory | null | undefined,
-  language: SupportedLanguage,
-): string {
-  const goalLabel = memory?.trainingGoal ?? "unknown"
-  const countryLabel = memory?.country ?? ""
-  const mealFoodsList = meal.foods.map((item) => `${item.name} (${item.quantity})`).join(", ")
-  const profileStr = [
-    memory?.biologicalSex,
-    memory?.userAge ? `${memory.userAge}y` : "",
-    memory?.heightCm ? `${memory.heightCm}cm` : "",
-    memory?.weightKg ? `${memory.weightKg}kg` : "",
-    countryLabel,
-  ]
-    .filter(Boolean)
-    .join(", ")
-
-  return [
-    `[DIET CONTEXT — language: ${language} — nutrition only]`,
-    `User opened chat from the food "?" button on their weekly diet plan.`,
-    `Food in question: "${food.name}" (${food.quantity}, ${food.kcal ?? "?"} kcal).`,
-    `Meal: "${meal.name}" (${meal.time}). Full meal: ${mealFoodsList}.`,
-    `Goal: ${goalLabel}. Profile: ${profileStr || "unknown"}.`,
-    `Food restrictions (what they avoid eating, incl. intolerances/allergies): ${memory?.foodRestrictions?.trim() || "none"}.`,
-    `Limitations/pathology: ${memory?.trainingPathology?.trim() || "none"}.`,
-    `Reply in ${language} with substitution, portion guidance, or macro impact for THIS food in THIS meal. Direct, max 2–3 short sentences.`,
-  ].join(" ")
-}
-
 function createGutoTurnId(userId: string): string {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID()
   return `${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function createActiveContext(
+  userId: string,
+  type: "workout" | "diet",
+  item: ActiveContextItem,
+): ActiveContext {
+  const now = new Date().toISOString()
+  return {
+    id: `ctx-${createGutoTurnId(userId)}`,
+    version: 1,
+    type,
+    sourceSurface: type === "workout" ? "mission" : "diet",
+    originalItem: item,
+    currentItem: item,
+    lastSuggestedItem: null,
+    rejectedItems: [],
+    acceptedItem: null,
+    createdAt: now,
+    updatedAt: now,
+  }
 }
 
 export function ChatTab({
@@ -662,7 +630,14 @@ export function ChatTab({
   const [isMuted, setIsMuted] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [showInitialXpCard, setShowInitialXpCard] = useState(false)
-  const [contextChip, setContextChip] = useState<{ type: "exercise" | "meal"; label: string } | null>(null)
+  const [contextChip, setContextChip] = useState<{ type: "exercise" | "meal"; label: string } | null>(() =>
+    memory?.activeContext
+      ? {
+          type: memory.activeContext.type === "workout" ? "exercise" : "meal",
+          label: memory.activeContext.currentItem.name,
+        }
+      : null
+  )
   const [proactiveMemories, setProactiveMemories] = useState<ProactiveMemory[]>([])
   const [editingTripMemoryId, setEditingTripMemoryId] = useState<string | null>(null)
   const [tripDateDraft, setTripDateDraft] = useState("")
@@ -680,8 +655,8 @@ export function ChatTab({
   const speechTranscriptRef = useRef("")
   const speechResultHandledRef = useRef(false)
   const handledExerciseQuestionRef = useRef<string | null>(null)
-  const activeExerciseContextRef = useRef<string | null>(null)
-  const activeDietContextRef = useRef<string | null>(null)
+  const activeContextRef = useRef<ActiveContext | null>(memory?.activeContext || null)
+  const activeContextWriteRef = useRef<Promise<unknown>>(Promise.resolve())
   const handledFoodQuestionRef = useRef<string | null>(null)
   const processedProactiveActionKeysRef = useRef<Set<string>>(new Set())
   const proactiveInFlightRef = useRef(false)
@@ -956,19 +931,35 @@ export function ChatTab({
   }, [initialXpGranted, initialXpRewardSeen, userId])
 
   const clearActiveContext = useCallback(() => {
-    const hadExercise = activeExerciseContextRef.current !== null
-    activeExerciseContextRef.current = null
-    activeDietContextRef.current = null
+    activeContextRef.current = null
     setContextChip(null)
-    if (hadExercise) void clearActiveExercise()
+    activeContextWriteRef.current = activeContextWriteRef.current
+      .catch(() => {})
+      .then(() => setActiveContext(null))
   }, [])
 
+  const activateContext = useCallback((context: ActiveContext) => {
+    activeContextRef.current = context
+    setContextChip({ type: context.type === "workout" ? "exercise" : "meal", label: context.currentItem.name })
+    activeContextWriteRef.current = activeContextWriteRef.current
+      .catch(() => {})
+      .then(async () => {
+        const persisted = await setActiveContext(context)
+        if (persisted && activeContextRef.current?.id === persisted.id) {
+          activeContextRef.current = persisted
+          onMemoryPatch?.({ activeContext: persisted })
+        }
+      })
+  }, [onMemoryPatch])
+
   const wrapWithActiveContext = useCallback((text: string) => {
-    const exerciseCtx = activeExerciseContextRef.current
-    if (exerciseCtx) return `${exerciseCtx} User message: ${text}`
-    const dietCtx = activeDietContextRef.current
-    if (dietCtx) return `${dietCtx} User question: ${text}`
-    return text
+    const context = activeContextRef.current
+    if (!context) return text
+    const item = context.currentItem
+    if (context.type === "workout") {
+      return `[ACTIVE WORKOUT CONTEXT id=${context.id} version=${context.version}] Exercise: "${item.name}". Prescription: ${item.sets ?? "?"} sets x ${item.reps || "?"}, rest ${item.rest || "?"}. User message: ${text}`
+    }
+    return `[ACTIVE DIET CONTEXT id=${context.id} version=${context.version}] Food: "${item.name}" (${item.quantity || "?"}) in meal "${item.mealName || "?"}". User question: ${text}`
   }, [])
 
   useEffect(() => {
@@ -1324,10 +1315,16 @@ export function ChatTab({
     }
 
     const turnId = options?.turnId || createGutoTurnId(userId)
+    const activeContextSnapshot = activeContextRef.current
     const nextPendingTurn: PendingChatTurn = options?.resumePending && pendingTurnRef.current
       ? pendingTurnRef.current
       : {
           turnId,
+          requestId: createGutoTurnId(userId),
+          contextId: activeContextSnapshot?.id || null,
+          contextVersion: activeContextSnapshot?.version || null,
+          activeContextType: activeContextSnapshot?.type || null,
+          activeItemId: activeContextSnapshot?.currentItem.id || null,
           displayText,
           modelInput,
           language: safeLanguage,
@@ -1385,7 +1382,41 @@ export function ChatTab({
         })),
         expectedResponse,
         turnId: nextPendingTurn.turnId,
+        requestId: nextPendingTurn.requestId,
+        contextId: nextPendingTurn.contextId,
+        contextVersion: nextPendingTurn.contextVersion,
+        activeContextType: nextPendingTurn.activeContextType,
+        activeItemId: nextPendingTurn.activeItemId,
       })
+
+      const currentContext = activeContextRef.current
+      if (!isGutoResponseCorrelated(nextPendingTurn, currentContext, data)) {
+        stopTypingLoop()
+        void trackGutoEvent({
+          event: "stale_context_response_discarded",
+          userId,
+          language: safeLanguage,
+          metadata: {
+            turnId: nextPendingTurn.turnId,
+            requestId: nextPendingTurn.requestId,
+            requestedContextId: nextPendingTurn.contextId,
+            currentContextId: currentContext?.id || null,
+            responseContextId: data.contextId ?? null,
+            reason: data.discardedReason || "correlation_mismatch",
+          },
+        }).catch(() => {})
+        pendingTurnRef.current = null
+        setPendingTurn(null)
+        return
+      }
+
+      if (data.activeContext && activeContextRef.current?.id === data.activeContext.id) {
+        activeContextRef.current = data.activeContext
+        setContextChip({
+          type: data.activeContext.type === "workout" ? "exercise" : "meal",
+          label: data.activeContext.currentItem.name,
+        })
+      }
 
       const fala = data?.fala?.trim() || copy.emptyResponseFallback
       const messageId = `g-${Date.now()}`
@@ -1507,20 +1538,16 @@ export function ChatTab({
     const { exercise } = pendingExerciseQuestion
     const lang = validLang as SupportedLanguage
 
-    activeDietContextRef.current = null
-    activeExerciseContextRef.current = buildExerciseModelContext(exercise, memory, lang, workoutPlan)
-    setContextChip({ type: "exercise", label: exercise.name })
-    // Persiste o exercício na fonte única (GutoMemory) para o cérebro saber dele
-    // entre mensagens — não some no turno seguinte (CORE §6).
-    void setActiveExercise({
-      source: "chat",
+    const position = workoutPlan?.exercises.findIndex((item) => item.id === exercise.id)
+    activateContext(createActiveContext(userId, "workout", {
+      id: exercise.id,
       name: exercise.name,
-      muscleGroup: exercise.muscleGroup,
+      position: typeof position === "number" && position >= 0 ? position : undefined,
+      workoutId: workoutPlan?.scheduledFor,
+      sets: exercise.sets,
       reps: String(exercise.reps),
       rest: exercise.rest,
-      totalSets: exercise.sets,
-      note: exercise.note || undefined,
-    })
+    }))
 
     const hintText = copy.exerciseContextHint(exercise.name)
     const hintId = `g-exercise-ctx-${pendingExerciseQuestion.id}`
@@ -1549,6 +1576,8 @@ export function ChatTab({
     onExerciseQuestionHandled,
     pendingExerciseQuestion,
     synthesizeAndPlay,
+    activateContext,
+    userId,
     validLang,
     workoutPlan,
   ])
@@ -1561,9 +1590,16 @@ export function ChatTab({
     handledFoodQuestionRef.current = key
 
     const lang = validLang as SupportedLanguage
-    activeExerciseContextRef.current = null
-    activeDietContextRef.current = buildDietModelContext(food, meal, memory, lang)
-    setContextChip({ type: "meal", label: food.name })
+    const position = meal.foods.findIndex((item) => item.name === food.name)
+    activateContext(createActiveContext(userId, "diet", {
+      id: `${meal.id}:${food.name.normalize("NFKC").trim().toLocaleLowerCase(lang)}`,
+      name: food.name,
+      position: position >= 0 ? position : undefined,
+      mealId: meal.id,
+      mealName: meal.name,
+      quantity: food.quantity,
+      nutritionalRole: food.notes,
+    }))
 
     const hintText = copy.mealContextHint(food.name)
     const hintId = `g-meal-ctx-${meal.id}-${food.name}`
@@ -1592,6 +1628,8 @@ export function ChatTab({
     onFoodQuestionHandled,
     pendingFoodQuestion,
     synthesizeAndPlay,
+    activateContext,
+    userId,
     validLang,
   ])
 
