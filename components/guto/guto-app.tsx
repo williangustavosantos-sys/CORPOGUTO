@@ -46,7 +46,7 @@ import {
 } from "@/lib/guto-profile"
 import { getWorkoutMissingFields, localizeGutoWorkoutPlan } from "@/lib/workout-plan"
 import { resolveWorkoutValidationLocationMode } from "@/lib/workout-location"
-import { hasDurableSovereignNameConfirmation, resolveDurableCommittedName, stageAfterInviteClaim } from "@/lib/onboarding-flow"
+import { commitCalibrationOnceAndRecover, hasDurableSovereignNameConfirmation, resolveDurableCommittedName, stageAfterInviteClaim } from "@/lib/onboarding-flow"
 
 type AppStage = "intro" | "language" | "invite_claim" | "consent" | "naming" | "calibration" | "pact" | "system" | "settings"
 type SettingsMode = "menu" | "language" | "name" | "data" | "profile" | "goal" | "location" | "pathology" | "physicaldata" | "residence" | "food_restrictions" | "privacy"
@@ -1510,19 +1510,25 @@ export function GutoApp({
   const handleCalibrationComplete = useCallback(
     async (calibration: GutoMemoryPayload) => {
       setProfileSaveError(null)
-      const updated = await persistMemory({
-        ...calibration,
-        language: selectedLanguage,
-        foodRestrictions: calibration.foodRestrictions?.trim(),
-        trainingPathology: calibration.trainingPathology?.trim(),
-        trainingStatus: calibration.trainingLevel,
-        trainingLimitations: calibration.trainingPathology?.trim(),
-      }, { optimistic: false })
+      const updated = await commitCalibrationOnceAndRecover(
+        () => persistMemory({
+          ...calibration,
+          language: selectedLanguage,
+          foodRestrictions: calibration.foodRestrictions?.trim(),
+          trainingPathology: calibration.trainingPathology?.trim(),
+          trainingStatus: calibration.trainingLevel,
+          trainingLimitations: calibration.trainingPathology?.trim(),
+        }, { optimistic: false }),
+        getGutoMemory,
+        hasCompleteGutoCalibration,
+      )
       if (!updated) {
         gutoAudio.playGutoFeedback("error")
         setProfileSaveError(stageCopy[selectedLanguage].profileSaveError)
         return
       }
+      memoryRef.current = updated
+      setMemory(updated)
       persistProfile({ calibrationComplete: true, onboardingComplete: false })
       trackBehaviorEvent("calibration_completed", { ...calibration })
       setStage("pact")
