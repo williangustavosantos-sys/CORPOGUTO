@@ -27,3 +27,24 @@ export function resolveDurableCommittedName(
 ): string {
   return hasDurableSovereignNameConfirmation(profile, memory) ? resolvedName : ""
 }
+
+/**
+ * A calibration write may commit even when its HTTP response is lost or cannot
+ * be decoded. Reconcile once from the durable source before keeping the user on
+ * the calibration screen. The commit callback is never retried.
+ */
+export async function commitCalibrationOnceAndRecover<T>(
+  commit: () => Promise<T | null>,
+  read: () => Promise<T>,
+  isComplete: (value: T) => boolean,
+): Promise<T | null> {
+  const committed = await commit()
+  if (committed && isComplete(committed)) return committed
+
+  try {
+    const recovered = await read()
+    return isComplete(recovered) ? recovered : null
+  } catch {
+    return null
+  }
+}
