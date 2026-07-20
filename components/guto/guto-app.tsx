@@ -766,6 +766,7 @@ export function GutoApp({
   const [inviteLoading, setInviteLoading] = useState(false)
 
   const timersRef = useRef<number[]>([])
+  const inviteTransitionTimerRef = useRef<number | null>(null)
   const pactIntervalRef = useRef<number | null>(null)
   const introSafetyTimerRef = useRef<number | null>(null)
   const introFinishedRef = useRef(false)
@@ -795,6 +796,16 @@ export function GutoApp({
     timersRef.current = []
   }, [])
 
+  const scheduleInviteTransition = useCallback((callback: () => void) => {
+    if (inviteTransitionTimerRef.current) {
+      window.clearTimeout(inviteTransitionTimerRef.current)
+    }
+    inviteTransitionTimerRef.current = window.setTimeout(() => {
+      inviteTransitionTimerRef.current = null
+      callback()
+    }, 2000)
+  }, [])
+
   const clearPactInterval = useCallback(() => {
     if (pactIntervalRef.current) {
       window.clearInterval(pactIntervalRef.current)
@@ -806,6 +817,13 @@ export function GutoApp({
     if (introSafetyTimerRef.current) {
       window.clearTimeout(introSafetyTimerRef.current)
       introSafetyTimerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => () => {
+    if (inviteTransitionTimerRef.current) {
+      window.clearTimeout(inviteTransitionTimerRef.current)
+      inviteTransitionTimerRef.current = null
     }
   }, [])
 
@@ -2151,7 +2169,10 @@ export function GutoApp({
       setInviteSuccess(true)
       clearPendingInviteStorage()
       setPendingInviteToken(null)
-      schedule(() => {
+      // This transition must not share the generic animation timers. Calling
+      // login restarts authenticated hydration, whose cleanup clears those
+      // timers and could otherwise leave the user on the success screen.
+      scheduleInviteTransition(() => {
         login({ ...res, role: res.role ?? "student" })
         const inviteResolvedName = firstRealGutoName(res.name, inviteClaimData?.name)
         setGutoUserId(res.userId)
@@ -2167,14 +2188,14 @@ export function GutoApp({
         }
         setStage(stageAfterInviteClaim())
         router.replace("/")
-      }, 2000)
+      })
     } catch (err: unknown) {
       void err
       gutoAudio.playGutoFeedback("error")
       setInviteError(ic.activationFailed)
       setInviteSubmitting(false)
     }
-  }, [pendingInviteToken, inviteSubmitting, selectedLanguage, invitePassword, inviteConfirmPassword, inviteClaimData, login, router, schedule])
+  }, [pendingInviteToken, inviteSubmitting, selectedLanguage, invitePassword, inviteConfirmPassword, inviteClaimData, login, router, scheduleInviteTransition])
 
   const handleExerciseQuestion = useCallback((exercise: MissionExercise) => {
     setPendingExerciseQuestion({
