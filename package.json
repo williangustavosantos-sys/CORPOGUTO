@@ -78,7 +78,12 @@
     "typescript": "5.7.3"
   },
   "overrides": {
-    "brace-expansion": "5.0.7",
+    "minimatch@3.1.5": {
+      "brace-expansion": "2.1.2"
+    },
+    "minimatch@10.2.5": {
+      "brace-expansion": "5.0.7"
+    },
     "fast-uri": "3.1.4",
     "postcss": "$postcss",
     "sharp": "0.35.3"

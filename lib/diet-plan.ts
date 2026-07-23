@@ -122,6 +122,7 @@ export class DietPlanValidationError extends Error {
 }
 
 export function sanitizeDietPlan(plan: DietPlan, _memory: GutoMemory | null): DietPlan {
+  void _memory
   if (plan.lockedByCoach || plan.manualOverride || plan.source === "coach_manual" || plan.source === "mixed") {
     return plan
   }
