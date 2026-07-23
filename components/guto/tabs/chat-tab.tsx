@@ -1410,12 +1410,13 @@ export function ChatTab({
         return
       }
 
-      if (data.activeContext && activeContextRef.current?.id === data.activeContext.id) {
+      if (data.activeContext) {
         activeContextRef.current = data.activeContext
         setContextChip({
           type: data.activeContext.type === "workout" ? "exercise" : "meal",
           label: data.activeContext.currentItem.name,
         })
+        onMemoryPatch?.({ activeContext: data.activeContext })
       }
 
       const fala = data?.fala?.trim() || copy.emptyResponseFallback
