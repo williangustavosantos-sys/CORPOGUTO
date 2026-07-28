@@ -34,6 +34,8 @@ describe("ChatTab operational state", () => {
 
   it("aguarda persistência do contexto, confirma o chip e nunca encerra correlação inválida sem fallback", () => {
     assert.match(chatTabSource, /await activeContextWriteRef\.current/)
+    assert.match(chatTabSource, /activeContextActivationRef/)
+    assert.match(chatTabSource, /activeContextActivationRef\.current === activationId/)
     assert.match(chatTabSource, /const persisted = await setActiveContext\(context\)/)
     assert.match(chatTabSource, /setContextChip\(\{\s*type: persisted\.type/)
     assert.match(chatTabSource, /resolveGutoResponseForRender\(/)

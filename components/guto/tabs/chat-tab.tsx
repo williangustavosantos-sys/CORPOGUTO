@@ -660,6 +660,7 @@ export function ChatTab({
   const handledExerciseQuestionRef = useRef<string | null>(null)
   const activeContextRef = useRef<ActiveContext | null>(memory?.activeContext || null)
   const activeContextWriteRef = useRef<Promise<unknown>>(Promise.resolve())
+  const activeContextActivationRef = useRef(0)
   const handledFoodQuestionRef = useRef<string | null>(null)
   const processedProactiveActionKeysRef = useRef<Set<string>>(new Set())
   const proactiveInFlightRef = useRef(false)
@@ -945,6 +946,7 @@ export function ChatTab({
   }, [initialXpGranted, initialXpRewardSeen, userId])
 
   const clearActiveContext = useCallback(() => {
+    activeContextActivationRef.current += 1
     activeContextRef.current = null
     setContextChip(null)
     activeContextWriteRef.current = activeContextWriteRef.current
@@ -954,13 +956,15 @@ export function ChatTab({
 
   const activateContext = useCallback((context: ActiveContext) => {
     const previousContext = activeContextRef.current
+    const activationId = activeContextActivationRef.current + 1
+    activeContextActivationRef.current = activationId
     activeContextRef.current = context
     activeContextWriteRef.current = activeContextWriteRef.current
       .catch(() => {})
       .then(async () => {
         try {
           const persisted = await setActiveContext(context)
-          if (persisted && activeContextRef.current?.id === persisted.id) {
+          if (persisted && activeContextActivationRef.current === activationId) {
             activeContextRef.current = persisted
             setContextChip({
               type: persisted.type === "workout" ? "exercise" : "meal",
@@ -969,7 +973,7 @@ export function ChatTab({
             onMemoryPatch?.({ activeContext: persisted })
           }
         } catch (error) {
-          if (activeContextRef.current?.id === context.id) {
+          if (activeContextActivationRef.current === activationId) {
             activeContextRef.current = previousContext
             setContextChip(previousContext
               ? {
