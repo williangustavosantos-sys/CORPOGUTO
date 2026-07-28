@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import type { ActiveContext } from "../lib/api/guto"
 import {
+  buildGutoModelInputWithActiveContext,
   isGutoResponseCorrelated,
   resolveGutoResponseForRender,
   shouldHydrateActiveContext,
@@ -104,5 +105,46 @@ describe("chat response correlation", () => {
       updatedAt: "2026-07-19T00:10:00.000Z",
     }
     assert.equal(shouldHydrateActiveContext(localActivation, persisted), false)
+  })
+
+  it("envia ao cérebro o substituto confirmado após reload para treino e dieta", () => {
+    const workout = {
+      ...context("ctx-workout", "workout", "supino_reto_maquina"),
+      version: 2,
+      currentItem: {
+        id: "crucifixo_maquina",
+        name: "Crucifixo máquina",
+        sets: 3,
+        reps: "10-12",
+        rest: "90s",
+      },
+      lastSuggestedItem: {
+        id: "crucifixo_maquina",
+        name: "Crucifixo máquina",
+      },
+    }
+    const workoutInput = buildGutoModelInputWithActiveContext("também está ocupado", workout)
+    assert.match(workoutInput, /Exercise: "Crucifixo máquina" \(id=crucifixo_maquina\)/)
+    assert.match(workoutInput, /Last confirmed substitute: "Crucifixo máquina" \(id=crucifixo_maquina\)/)
+
+    const diet = {
+      ...context("ctx-diet", "diet", "wholegrain_bread"),
+      version: 2,
+      currentItem: {
+        id: "wholegrain_bread",
+        name: "Pão integral",
+        quantity: "2 fatias",
+        mealId: "cafe",
+        mealName: "Café da manhã",
+      },
+      lastSuggestedItem: {
+        id: "wholegrain_bread",
+        name: "Pão integral",
+        quantity: "2 fatias",
+      },
+    }
+    const dietInput = buildGutoModelInputWithActiveContext("também não tenho essa opção", diet)
+    assert.match(dietInput, /Food: "Pão integral" \(id=wholegrain_bread, quantity=2 fatias\)/)
+    assert.match(dietInput, /Last confirmed substitute: "Pão integral" \(id=wholegrain_bread\)/)
   })
 })

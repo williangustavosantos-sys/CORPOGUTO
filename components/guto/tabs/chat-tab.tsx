@@ -7,6 +7,7 @@ import { Dumbbell, Loader2, Mic, Plane, Send, TrendingUp, UtensilsCrossed, Volum
 
 import { getApiErrorMessage } from "@/lib/api/client"
 import {
+  buildGutoModelInputWithActiveContext,
   resolveGutoResponseForRender,
   shouldHydrateActiveContext,
 } from "@/lib/guto-context-correlation"
@@ -988,13 +989,7 @@ export function ChatTab({
   }, [onMemoryPatch])
 
   const wrapWithActiveContext = useCallback((text: string) => {
-    const context = activeContextRef.current
-    if (!context) return text
-    const item = context.currentItem
-    if (context.type === "workout") {
-      return `[ACTIVE WORKOUT CONTEXT id=${context.id} version=${context.version}] Exercise: "${item.name}". Prescription: ${item.sets ?? "?"} sets x ${item.reps || "?"}, rest ${item.rest || "?"}. User message: ${text}`
-    }
-    return `[ACTIVE DIET CONTEXT id=${context.id} version=${context.version}] Food: "${item.name}" (${item.quantity || "?"}) in meal "${item.mealName || "?"}". User question: ${text}`
+    return buildGutoModelInputWithActiveContext(text, activeContextRef.current)
   }, [])
 
   useEffect(() => {

@@ -65,3 +65,18 @@ export function shouldHydrateActiveContext(
   if (!Number.isFinite(currentUpdatedAt)) return true
   return incomingUpdatedAt >= currentUpdatedAt
 }
+
+export function buildGutoModelInputWithActiveContext(
+  text: string,
+  context: ActiveContext | null,
+): string {
+  if (!context) return text
+  const item = context.currentItem
+  const confirmedSubstitute = context.lastSuggestedItem
+    ? ` Last confirmed substitute: "${context.lastSuggestedItem.name}" (id=${context.lastSuggestedItem.id}).`
+    : ""
+  if (context.type === "workout") {
+    return `[ACTIVE WORKOUT CONTEXT id=${context.id} version=${context.version}] Exercise: "${item.name}" (id=${item.id}).${confirmedSubstitute} Prescription: ${item.sets ?? "?"} sets x ${item.reps || "?"}, rest ${item.rest || "?"}. User message: ${text}`
+  }
+  return `[ACTIVE DIET CONTEXT id=${context.id} version=${context.version}] Food: "${item.name}" (id=${item.id}, quantity=${item.quantity || "?"}) in meal "${item.mealName || "?"}".${confirmedSubstitute} User question: ${text}`
+}
