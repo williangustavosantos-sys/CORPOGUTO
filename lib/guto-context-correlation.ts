@@ -25,3 +25,26 @@ export function isGutoResponseCorrelated(
     (request.contextId === null || currentContext?.id === request.contextId)
   )
 }
+
+export type GutoResponseRenderDecision =
+  | { kind: "accepted"; speech: string }
+  | { kind: "fallback"; speech: string; reason: "stale_context" | "correlation_mismatch" | "empty_response" }
+
+export function resolveGutoResponseForRender(
+  request: GutoRequestContextSnapshot,
+  currentContext: ActiveContext | null,
+  response: SendGutoMessageResponse,
+  fallbackSpeech: string,
+): GutoResponseRenderDecision {
+  if (!isGutoResponseCorrelated(request, currentContext, response)) {
+    return {
+      kind: "fallback",
+      speech: fallbackSpeech,
+      reason: response.discardedReason === "stale_context" ? "stale_context" : "correlation_mismatch",
+    }
+  }
+  const speech = response.fala?.trim()
+  return speech
+    ? { kind: "accepted", speech }
+    : { kind: "fallback", speech: fallbackSpeech, reason: "empty_response" }
+}

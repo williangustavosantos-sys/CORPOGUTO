@@ -1,7 +1,10 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import type { ActiveContext } from "../lib/api/guto"
-import { isGutoResponseCorrelated } from "../lib/guto-context-correlation"
+import {
+  isGutoResponseCorrelated,
+  resolveGutoResponseForRender,
+} from "../lib/guto-context-correlation"
 
 function context(id: string, type: "workout" | "diet", itemId: string): ActiveContext {
   const item = { id: itemId, name: itemId }
@@ -44,5 +47,44 @@ describe("chat response correlation", () => {
   it("descarta identificador divergente ou marca explícita stale_context", () => {
     assert.equal(isGutoResponseCorrelated(request, context("ctx-workout", "workout", "supino"), { ...response, requestId: "old" }), false)
     assert.equal(isGutoResponseCorrelated(request, context("ctx-workout", "workout", "supino"), { ...response, discardedReason: "stale_context" }), false)
+  })
+
+  it("renderiza resposta válida e usa fallback honesto para stale, correlação inválida ou fala vazia", () => {
+    assert.deepEqual(
+      resolveGutoResponseForRender(
+        request,
+        context("ctx-workout", "workout", "supino"),
+        response,
+        "fallback",
+      ),
+      { kind: "accepted", speech: "resposta" },
+    )
+    assert.deepEqual(
+      resolveGutoResponseForRender(
+        request,
+        context("ctx-workout", "workout", "supino"),
+        { ...response, discardedReason: "stale_context" },
+        "fallback",
+      ),
+      { kind: "fallback", speech: "fallback", reason: "stale_context" },
+    )
+    assert.deepEqual(
+      resolveGutoResponseForRender(
+        request,
+        context("ctx-workout", "workout", "supino"),
+        { ...response, requestId: "old" },
+        "fallback",
+      ),
+      { kind: "fallback", speech: "fallback", reason: "correlation_mismatch" },
+    )
+    assert.deepEqual(
+      resolveGutoResponseForRender(
+        request,
+        context("ctx-workout", "workout", "supino"),
+        { ...response, fala: "   " },
+        "fallback",
+      ),
+      { kind: "fallback", speech: "fallback", reason: "empty_response" },
+    )
   })
 })

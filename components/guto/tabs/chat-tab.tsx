@@ -6,7 +6,7 @@ import { AnimatePresence, motion } from "framer-motion"
 import { Dumbbell, Loader2, Mic, Plane, Send, TrendingUp, UtensilsCrossed, Volume2, VolumeX } from "lucide-react"
 
 import { getApiErrorMessage } from "@/lib/api/client"
-import { isGutoResponseCorrelated } from "@/lib/guto-context-correlation"
+import { resolveGutoResponseForRender } from "@/lib/guto-context-correlation"
 import {
   cancelDiscardRequest,
   confirmProactiveMemory,
@@ -939,15 +939,32 @@ export function ChatTab({
   }, [])
 
   const activateContext = useCallback((context: ActiveContext) => {
+    const previousContext = activeContextRef.current
     activeContextRef.current = context
-    setContextChip({ type: context.type === "workout" ? "exercise" : "meal", label: context.currentItem.name })
     activeContextWriteRef.current = activeContextWriteRef.current
       .catch(() => {})
       .then(async () => {
-        const persisted = await setActiveContext(context)
-        if (persisted && activeContextRef.current?.id === persisted.id) {
-          activeContextRef.current = persisted
-          onMemoryPatch?.({ activeContext: persisted })
+        try {
+          const persisted = await setActiveContext(context)
+          if (persisted && activeContextRef.current?.id === persisted.id) {
+            activeContextRef.current = persisted
+            setContextChip({
+              type: persisted.type === "workout" ? "exercise" : "meal",
+              label: persisted.currentItem.name,
+            })
+            onMemoryPatch?.({ activeContext: persisted })
+          }
+        } catch (error) {
+          if (activeContextRef.current?.id === context.id) {
+            activeContextRef.current = previousContext
+            setContextChip(previousContext
+              ? {
+                  type: previousContext.type === "workout" ? "exercise" : "meal",
+                  label: previousContext.currentItem.name,
+                }
+              : null)
+          }
+          throw error
         }
       })
   }, [onMemoryPatch])
@@ -1314,6 +1331,35 @@ export function ChatTab({
       timestamp: new Date(),
     }
 
+    try {
+      await activeContextWriteRef.current
+    } catch {
+      const fallbackMessage: Message = {
+        id: `g-context-err-${Date.now()}`,
+        text: copy.connectionError,
+        isGuto: true,
+        timestamp: new Date(),
+        avatarEmotion: "default",
+      }
+      const failedMessages = options?.hideUserBubble
+        ? [...messagesRef.current, fallbackMessage]
+        : [...messagesRef.current, userMessage, fallbackMessage]
+      messagesRef.current = failedMessages
+      setMessages(failedMessages)
+      setInput("")
+      pendingTurnRef.current = null
+      setPendingTurn(null)
+      writeStoredChatState(userId, {
+        messages: failedMessages,
+        expectedResponse: null,
+        expectedResponseMessageId: null,
+        pendingTurn: null,
+      })
+      sendInFlightRef.current = false
+      setIsSending(false)
+      return
+    }
+
     const turnId = options?.turnId || createGutoTurnId(userId)
     const activeContextSnapshot = activeContextRef.current
     const nextPendingTurn: PendingChatTurn = options?.resumePending && pendingTurnRef.current
@@ -1390,21 +1436,41 @@ export function ChatTab({
       })
 
       const currentContext = activeContextRef.current
-      if (!isGutoResponseCorrelated(nextPendingTurn, currentContext, data)) {
+      const renderDecision = resolveGutoResponseForRender(
+        nextPendingTurn,
+        currentContext,
+        data,
+        copy.emptyResponseFallback,
+      )
+      if (renderDecision.kind === "fallback") {
         stopTypingLoop()
-        void trackGutoEvent({
-          event: "stale_context_response_discarded",
-          userId,
-          language: safeLanguage,
-          metadata: {
-            turnId: nextPendingTurn.turnId,
-            requestId: nextPendingTurn.requestId,
-            requestedContextId: nextPendingTurn.contextId,
-            currentContextId: currentContext?.id || null,
-            responseContextId: data.contextId ?? null,
-            reason: data.discardedReason || "correlation_mismatch",
-          },
-        }).catch(() => {})
+        if (renderDecision.reason !== "empty_response") {
+          void trackGutoEvent({
+            event: "stale_context_response_discarded",
+            userId,
+            language: safeLanguage,
+            metadata: {
+              turnId: nextPendingTurn.turnId,
+              requestId: nextPendingTurn.requestId,
+              requestedContextId: nextPendingTurn.contextId,
+              currentContextId: currentContext?.id || null,
+              responseContextId: data.contextId ?? null,
+              reason: renderDecision.reason,
+            },
+          }).catch(() => {})
+        }
+        syncExpectedResponse(null, null)
+        const fallbackMessage: Message = {
+          id: `g-fallback-${Date.now()}`,
+          text: renderDecision.speech,
+          isGuto: true,
+          timestamp: new Date(),
+          avatarEmotion: "default",
+        }
+        setMessages((prev) => appendMessagesWithoutDuplicateGuto(prev, [fallbackMessage]))
+        if (!isMuted) {
+          void synthesizeAndPlay(renderDecision.speech, safeLanguage)
+        }
         pendingTurnRef.current = null
         setPendingTurn(null)
         return
@@ -1419,7 +1485,7 @@ export function ChatTab({
         onMemoryPatch?.({ activeContext: data.activeContext })
       }
 
-      const fala = data?.fala?.trim() || copy.emptyResponseFallback
+      const fala = renderDecision.speech
       const messageId = `g-${Date.now()}`
       syncExpectedResponse(data?.expectedResponse || null, data?.expectedResponse ? messageId : null)
 
