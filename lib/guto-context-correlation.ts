@@ -48,3 +48,20 @@ export function resolveGutoResponseForRender(
     ? { kind: "accepted", speech }
     : { kind: "fallback", speech: fallbackSpeech, reason: "empty_response" }
 }
+
+export function shouldHydrateActiveContext(
+  currentContext: ActiveContext | null,
+  incomingContext: ActiveContext,
+): boolean {
+  if (!currentContext) return true
+
+  if (currentContext.id === incomingContext.id) {
+    return incomingContext.version >= currentContext.version
+  }
+
+  const currentUpdatedAt = Date.parse(currentContext.updatedAt)
+  const incomingUpdatedAt = Date.parse(incomingContext.updatedAt)
+  if (!Number.isFinite(incomingUpdatedAt)) return false
+  if (!Number.isFinite(currentUpdatedAt)) return true
+  return incomingUpdatedAt >= currentUpdatedAt
+}

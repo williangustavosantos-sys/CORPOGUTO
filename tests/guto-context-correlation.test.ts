@@ -4,6 +4,7 @@ import type { ActiveContext } from "../lib/api/guto"
 import {
   isGutoResponseCorrelated,
   resolveGutoResponseForRender,
+  shouldHydrateActiveContext,
 } from "../lib/guto-context-correlation"
 
 function context(id: string, type: "workout" | "diet", itemId: string): ActiveContext {
@@ -86,5 +87,22 @@ describe("chat response correlation", () => {
       ),
       { kind: "fallback", speech: "fallback", reason: "empty_response" },
     )
+  })
+
+  it("reidrata o chip com o contexto persistido mais novo sem sobrescrever uma ativação local recente", () => {
+    const staleLocal = context("ctx-old", "workout", "supino")
+    const persisted = {
+      ...context("ctx-old", "workout", "flexao"),
+      version: 3,
+      currentItem: { id: "flexao", name: "Flexão" },
+      updatedAt: "2026-07-19T00:05:00.000Z",
+    }
+    assert.equal(shouldHydrateActiveContext(staleLocal, persisted), true)
+
+    const localActivation = {
+      ...context("ctx-food", "diet", "soy_yogurt"),
+      updatedAt: "2026-07-19T00:10:00.000Z",
+    }
+    assert.equal(shouldHydrateActiveContext(localActivation, persisted), false)
   })
 })

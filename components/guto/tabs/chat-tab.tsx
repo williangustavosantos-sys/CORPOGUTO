@@ -6,7 +6,10 @@ import { AnimatePresence, motion } from "framer-motion"
 import { Dumbbell, Loader2, Mic, Plane, Send, TrendingUp, UtensilsCrossed, Volume2, VolumeX } from "lucide-react"
 
 import { getApiErrorMessage } from "@/lib/api/client"
-import { resolveGutoResponseForRender } from "@/lib/guto-context-correlation"
+import {
+  resolveGutoResponseForRender,
+  shouldHydrateActiveContext,
+} from "@/lib/guto-context-correlation"
 import {
   cancelDiscardRequest,
   confirmProactiveMemory,
@@ -909,6 +912,17 @@ export function ChatTab({
   useEffect(() => {
     showInitialXpCardRef.current = showInitialXpCard
   }, [showInitialXpCard])
+
+  useEffect(() => {
+    const incomingContext = memory?.activeContext
+    if (!incomingContext || !shouldHydrateActiveContext(activeContextRef.current, incomingContext)) return
+
+    activeContextRef.current = incomingContext
+    setContextChip({
+      type: incomingContext.type === "workout" ? "exercise" : "meal",
+      label: incomingContext.currentItem.name,
+    })
+  }, [memory?.activeContext])
 
   useEffect(() => {
     if (!initialXpGranted) return
