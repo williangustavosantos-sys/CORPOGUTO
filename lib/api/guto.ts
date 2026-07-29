@@ -216,6 +216,12 @@ export interface ActiveContext {
   updatedAt: string
 }
 
+export interface GutoLastSuggestedItem {
+  id: string
+  name: string
+  kind: "exercise" | "food"
+}
+
 export interface SendGutoMessageRequest {
   profile: {
     name: string
@@ -237,6 +243,7 @@ export interface SendGutoMessageRequest {
   contextVersion: number | null
   activeContextType: ActiveContextType | null
   activeItemId: string | null
+  lastSuggestedItem: GutoLastSuggestedItem | null
 }
 
 export type ProactiveMemoryStage =
@@ -351,6 +358,7 @@ export interface GutoMemory {
   proactiveImpacts?: ProactiveImpact[]
   proactivePrompt?: ProactivePrompt | null
   activeConversationContext?: ActiveConversationContext | null
+  dietConsistencyStatus?: "consistent" | "reconciliation_pending"
   dietGenerationStatus?: "idle" | "ready_to_generate" | "generating" | "generated" | "needs_clarification" | "failed"
   weeklyWorkoutPlan?: {
     studentId: string

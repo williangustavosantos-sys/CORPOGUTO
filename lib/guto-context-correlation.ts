@@ -1,4 +1,9 @@
-import type { ActiveContext, ActiveContextType, SendGutoMessageResponse } from "@/lib/api/guto"
+import type {
+  ActiveContext,
+  ActiveContextType,
+  GutoLastSuggestedItem,
+  SendGutoMessageResponse,
+} from "@/lib/api/guto"
 
 export interface GutoRequestContextSnapshot {
   turnId: string
@@ -24,4 +29,68 @@ export function isGutoResponseCorrelated(
     (response.activeItemId ?? null) === request.activeItemId &&
     (request.contextId === null || currentContext?.id === request.contextId)
   )
+}
+
+export type GutoResponseRenderDecision =
+  | { kind: "accepted"; speech: string }
+  | { kind: "fallback"; speech: string; reason: "stale_context" | "correlation_mismatch" | "empty_response" }
+
+export function resolveGutoResponseForRender(
+  request: GutoRequestContextSnapshot,
+  currentContext: ActiveContext | null,
+  response: SendGutoMessageResponse,
+  fallbackSpeech: string,
+): GutoResponseRenderDecision {
+  if (!isGutoResponseCorrelated(request, currentContext, response)) {
+    return {
+      kind: "fallback",
+      speech: fallbackSpeech,
+      reason: response.discardedReason === "stale_context" ? "stale_context" : "correlation_mismatch",
+    }
+  }
+  const speech = response.fala?.trim()
+  return speech
+    ? { kind: "accepted", speech }
+    : { kind: "fallback", speech: fallbackSpeech, reason: "empty_response" }
+}
+
+export function shouldHydrateActiveContext(
+  currentContext: ActiveContext | null,
+  incomingContext: ActiveContext,
+): boolean {
+  if (!currentContext) return true
+
+  if (currentContext.id === incomingContext.id) {
+    return incomingContext.version >= currentContext.version
+  }
+
+  const currentUpdatedAt = Date.parse(currentContext.updatedAt)
+  const incomingUpdatedAt = Date.parse(incomingContext.updatedAt)
+  if (!Number.isFinite(incomingUpdatedAt)) return false
+  if (!Number.isFinite(currentUpdatedAt)) return true
+  return incomingUpdatedAt >= currentUpdatedAt
+}
+
+export function buildGutoModelInputWithActiveContext(
+  text: string,
+  context: ActiveContext | null,
+): string {
+  if (!context) return text
+  const item = context.currentItem
+  if (context.type === "workout") {
+    return `[ACTIVE WORKOUT CONTEXT id=${context.id} version=${context.version}] Exercise: "${item.name}" (id=${item.id}). Prescription: ${item.sets ?? "?"} sets x ${item.reps || "?"}, rest ${item.rest || "?"}. User message: ${text}`
+  }
+  return `[ACTIVE DIET CONTEXT id=${context.id} version=${context.version}] Food: "${item.name}" (id=${item.id}, quantity=${item.quantity || "?"}) in meal "${item.mealName || "?"}". User question: ${text}`
+}
+
+export function buildGutoLastSuggestedItem(
+  context: ActiveContext | null,
+): GutoLastSuggestedItem | null {
+  const item = context?.lastSuggestedItem
+  if (!context || !item?.id?.trim() || !item.name?.trim()) return null
+  return {
+    id: item.id,
+    name: item.name,
+    kind: context.type === "workout" ? "exercise" : "food",
+  }
 }
