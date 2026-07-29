@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
+import { readFileSync } from "node:fs"
 import type { ActiveContext } from "../lib/api/guto"
 import {
+  buildGutoLastSuggestedItem,
   buildGutoModelInputWithActiveContext,
   isGutoResponseCorrelated,
   resolveGutoResponseForRender,
@@ -107,7 +109,7 @@ describe("chat response correlation", () => {
     assert.equal(shouldHydrateActiveContext(localActivation, persisted), false)
   })
 
-  it("envia ao cérebro o substituto confirmado após reload para treino e dieta", () => {
+  it("envia o substituto confirmado em campo estruturado após reload para treino e dieta", () => {
     const workout = {
       ...context("ctx-workout", "workout", "supino_reto_maquina"),
       version: 2,
@@ -125,7 +127,12 @@ describe("chat response correlation", () => {
     }
     const workoutInput = buildGutoModelInputWithActiveContext("também está ocupado", workout)
     assert.match(workoutInput, /Exercise: "Crucifixo máquina" \(id=crucifixo_maquina\)/)
-    assert.match(workoutInput, /Last confirmed substitute: "Crucifixo máquina" \(id=crucifixo_maquina\)/)
+    assert.doesNotMatch(workoutInput, /Last confirmed substitute/)
+    assert.deepEqual(buildGutoLastSuggestedItem(workout), {
+      id: "crucifixo_maquina",
+      name: "Crucifixo máquina",
+      kind: "exercise",
+    })
 
     const diet = {
       ...context("ctx-diet", "diet", "wholegrain_bread"),
@@ -145,6 +152,21 @@ describe("chat response correlation", () => {
     }
     const dietInput = buildGutoModelInputWithActiveContext("também não tenho essa opção", diet)
     assert.match(dietInput, /Food: "Pão integral" \(id=wholegrain_bread, quantity=2 fatias\)/)
-    assert.match(dietInput, /Last confirmed substitute: "Pão integral" \(id=wholegrain_bread\)/)
+    assert.doesNotMatch(dietInput, /Last confirmed substitute/)
+    assert.deepEqual(buildGutoLastSuggestedItem(diet), {
+      id: "wholegrain_bread",
+      name: "Pão integral",
+      kind: "food",
+    })
+  })
+
+  it("o turno pendente preserva e envia o campo estruturado separado do texto", () => {
+    const source = readFileSync(
+      new URL("../components/guto/tabs/chat-tab.tsx", import.meta.url),
+      "utf8",
+    )
+    assert.match(source, /lastSuggestedItem:\s*buildGutoLastSuggestedItem\(activeContextSnapshot\)/)
+    assert.match(source, /lastSuggestedItem:\s*nextPendingTurn\.lastSuggestedItem\s*\|\|\s*null/)
+    assert.doesNotMatch(source, /Last confirmed substitute:/)
   })
 })

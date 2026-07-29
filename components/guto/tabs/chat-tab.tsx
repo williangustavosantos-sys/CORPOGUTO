@@ -7,6 +7,7 @@ import { Dumbbell, Loader2, Mic, Plane, Send, TrendingUp, UtensilsCrossed, Volum
 
 import { getApiErrorMessage } from "@/lib/api/client"
 import {
+  buildGutoLastSuggestedItem,
   buildGutoModelInputWithActiveContext,
   resolveGutoResponseForRender,
   shouldHydrateActiveContext,
@@ -31,6 +32,7 @@ import type {
   DietMeal,
   GutoAvatarEmotion,
   GutoExpectedResponse,
+  GutoLastSuggestedItem,
   GutoMemory,
   GutoProactiveMemoryAction,
   GutoProactivityActionResult,
@@ -152,6 +154,7 @@ interface PendingChatTurn {
   contextVersion: number | null
   activeContextType: "workout" | "diet" | null
   activeItemId: string | null
+  lastSuggestedItem: GutoLastSuggestedItem | null
   displayText: string
   modelInput: string
   language: SupportedLanguage
@@ -1384,6 +1387,7 @@ export function ChatTab({
           contextVersion: activeContextSnapshot?.version || null,
           activeContextType: activeContextSnapshot?.type || null,
           activeItemId: activeContextSnapshot?.currentItem.id || null,
+          lastSuggestedItem: buildGutoLastSuggestedItem(activeContextSnapshot),
           displayText,
           modelInput,
           language: safeLanguage,
@@ -1446,6 +1450,7 @@ export function ChatTab({
         contextVersion: nextPendingTurn.contextVersion,
         activeContextType: nextPendingTurn.activeContextType,
         activeItemId: nextPendingTurn.activeItemId,
+        lastSuggestedItem: nextPendingTurn.lastSuggestedItem || null,
       })
 
       const currentContext = activeContextRef.current

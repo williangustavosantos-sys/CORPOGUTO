@@ -1,4 +1,9 @@
-import type { ActiveContext, ActiveContextType, SendGutoMessageResponse } from "@/lib/api/guto"
+import type {
+  ActiveContext,
+  ActiveContextType,
+  GutoLastSuggestedItem,
+  SendGutoMessageResponse,
+} from "@/lib/api/guto"
 
 export interface GutoRequestContextSnapshot {
   turnId: string
@@ -72,11 +77,20 @@ export function buildGutoModelInputWithActiveContext(
 ): string {
   if (!context) return text
   const item = context.currentItem
-  const confirmedSubstitute = context.lastSuggestedItem
-    ? ` Last confirmed substitute: "${context.lastSuggestedItem.name}" (id=${context.lastSuggestedItem.id}).`
-    : ""
   if (context.type === "workout") {
-    return `[ACTIVE WORKOUT CONTEXT id=${context.id} version=${context.version}] Exercise: "${item.name}" (id=${item.id}).${confirmedSubstitute} Prescription: ${item.sets ?? "?"} sets x ${item.reps || "?"}, rest ${item.rest || "?"}. User message: ${text}`
+    return `[ACTIVE WORKOUT CONTEXT id=${context.id} version=${context.version}] Exercise: "${item.name}" (id=${item.id}). Prescription: ${item.sets ?? "?"} sets x ${item.reps || "?"}, rest ${item.rest || "?"}. User message: ${text}`
   }
-  return `[ACTIVE DIET CONTEXT id=${context.id} version=${context.version}] Food: "${item.name}" (id=${item.id}, quantity=${item.quantity || "?"}) in meal "${item.mealName || "?"}".${confirmedSubstitute} User question: ${text}`
+  return `[ACTIVE DIET CONTEXT id=${context.id} version=${context.version}] Food: "${item.name}" (id=${item.id}, quantity=${item.quantity || "?"}) in meal "${item.mealName || "?"}". User question: ${text}`
+}
+
+export function buildGutoLastSuggestedItem(
+  context: ActiveContext | null,
+): GutoLastSuggestedItem | null {
+  const item = context?.lastSuggestedItem
+  if (!context || !item?.id?.trim() || !item.name?.trim()) return null
+  return {
+    id: item.id,
+    name: item.name,
+    kind: context.type === "workout" ? "exercise" : "food",
+  }
 }
