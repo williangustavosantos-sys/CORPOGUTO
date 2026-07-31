@@ -28,6 +28,7 @@ import type { EvolutionStage, SupportedLanguage } from "@/types/contract"
 import { resolveGutoEvolutionStage } from "@/lib/guto-evolution"
 import { getGutoVitalState } from "@/lib/guto-vital-state"
 import { commitPactOnceAndRecover, recoverDurablePostPactArtifacts } from "@/lib/guto-pact"
+import { acceptConsentOnceAndRecover } from "@/lib/guto-consent"
 import { isPushSupported, getCurrentSubscription, subscribePush, unsubscribePush } from "@/lib/push-client"
 import { createPortalSession, getBillingStatus, type BillingStatus } from "@/lib/api/billing"
 import { translations } from "./translations"
@@ -1319,14 +1320,13 @@ export function GutoApp({
 
   const handleConsentAccepted = useCallback(async () => {
     // Fase 2A — o aceite tem de ser gravado no backend (fonte de verdade).
-    // Se o backend falhar, NÃO avança nem finge que salvou.
+    // O POST é idempotente: se a resposta se perder depois do commit, reconcilia
+    // pela leitura durável antes de decidir se pode avançar.
     setProfileSaveError(null)
-    let updated: GutoMemory | null = null
-    try {
-      updated = await acceptGutoConsent()
-    } catch {
-      updated = null
-    }
+    const updated = await acceptConsentOnceAndRecover<GutoMemory>({
+      accept: acceptGutoConsent,
+      read: getGutoMemory,
+    })
     if (!updated) {
       gutoAudio.playGutoFeedback("error")
       setProfileSaveError(stageCopy[selectedLanguage].profileSaveError)
