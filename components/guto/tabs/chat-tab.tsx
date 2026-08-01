@@ -514,7 +514,12 @@ function writeStoredChatState(userId: string, state: StoredChatState) {
       JSON.stringify({
         messages: state.messages.slice(-80).map((message) => ({
           ...message,
-          timestamp: message.timestamp.toISOString(),
+          timestamp:
+            typeof message.timestamp === "string"
+              ? message.timestamp
+              : message.timestamp && typeof (message.timestamp as Date).toISOString === "function"
+              ? (message.timestamp as Date).toISOString()
+              : new Date().toISOString(),
         })),
         expectedResponse: state.expectedResponse,
         expectedResponseMessageId: state.expectedResponseMessageId,
