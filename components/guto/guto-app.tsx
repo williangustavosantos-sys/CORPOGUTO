@@ -45,6 +45,7 @@ import {
 } from "@/lib/guto-profile"
 import { getWorkoutMissingFields, localizeGutoWorkoutPlan } from "@/lib/workout-plan"
 import { resolveWorkoutValidationLocationMode } from "@/lib/workout-location"
+import { clearVolatileGutoStorage } from "@/lib/guto-local-state"
 
 type AppStage = "intro" | "language" | "invite_claim" | "consent" | "naming" | "calibration" | "pact" | "system" | "settings"
 type SettingsMode = "menu" | "language" | "name" | "data" | "profile" | "goal" | "location" | "pathology" | "physicaldata" | "residence" | "food_restrictions" | "privacy"
@@ -83,7 +84,7 @@ interface NameGate {
 type GutoMemoryPayload = Parameters<typeof saveGutoMemory>[0]
 
 const STORAGE_KEY = "guto-white-lab-profile"
-const STORAGE_VERSION = 2  // bump aqui para forçar reset em todos os dispositivos
+const STORAGE_VERSION = 3  // bump aqui para limpar estados voláteis antigos em todos os dispositivos
 const STORAGE_VERSION_KEY = "guto-storage-version"
 const DEBUG_RESET_KEY = "guto-debug-reset"
 const HOLD_INTERVAL_MS = 16
@@ -625,6 +626,27 @@ function hasMemoryConsent(memory?: GutoMemory | null) {
   return Boolean(memory?.consentHealthFitness && memory?.acceptedTerms)
 }
 
+function calibrationInitialProfileFromMemory(memory?: GutoMemory | null) {
+  if (!memory) return null
+  return {
+    userAge: memory.userAge,
+    biologicalSex:
+      memory.biologicalSex === "male" || memory.biologicalSex === "female"
+        ? memory.biologicalSex
+        : undefined,
+    trainingLevel: memory.trainingLevel,
+    trainingGoal: memory.trainingGoal,
+    preferredTrainingLocation: memory.preferredTrainingLocation,
+    trainingPathology: memory.trainingPathology,
+    country: memory.country,
+    countryCode: memory.countryCode,
+    city: memory.city,
+    heightCm: memory.heightCm,
+    weightKg: memory.weightKg,
+    foodRestrictions: memory.foodRestrictions,
+  }
+}
+
 function resolveAuthenticatedStage(
   user: { userId: string } | null | undefined,
   profile?: StoredProfile | null,
@@ -633,12 +655,15 @@ function resolveAuthenticatedStage(
   if (!user) return "intro"
 
 
-  // Fase 2A — backend é a fonte de verdade do consentimento (igual à calibragem).
-  // Se a memória do backend carregou, ela manda; localStorage é só cache/UX.
-  // Assim, consentimento revogado em outro device força a tela de consent mesmo
-  // que o cache local diga o contrário.
+  // Fase 2A — backend é a fonte de verdade do consentimento no retorno normal.
+  // Durante o onboarding antes do pacto, porém, uma leitura assíncrona antiga pode
+  // chegar sem o consentimento recém-confirmado e jogar o aluno de volta para esta
+  // tela. Nesse intervalo curto, o cache local confirmado pelo POST /consent/accept
+  // pode sustentar a transição até a próxima leitura fresca do backend.
+  const localConsentAccepted = Boolean(profile?.consentHealthFitness && profile?.acceptedTerms && profile?.consentAcceptedAt)
+  const onboardingBeforePact = !profile?.onboardingComplete && !profile?.pactAccepted
   const consentMissing = memory
-    ? !hasMemoryConsent(memory)
+    ? !hasMemoryConsent(memory) && !(onboardingBeforePact && localConsentAccepted)
     : (!profile?.consentHealthFitness || !profile?.acceptedTerms)
   if (consentMissing) {
     return "consent"
@@ -674,8 +699,11 @@ function resolveAuthenticatedStage(
     return "calibration"
   }
 
-  // Pacto: flag local OU prova no backend (XP inicial já concedido).
-  if (profile?.onboardingComplete || profile?.pactAccepted || pactDoneBackend) {
+  // Pacto: quando a memória carregou, o backend manda. Flag local só serve como
+  // fallback se a memória não carregou; isso evita entrar no app sem XP/pacto
+  // gravados no servidor.
+  const pactDoneLocal = Boolean(profile?.onboardingComplete || profile?.pactAccepted)
+  if (memory ? pactDoneBackend : pactDoneLocal) {
     return "system"
   }
 
@@ -757,6 +785,7 @@ export function GutoApp({
   const introStartedRef = useRef(false)
   const introStartedAtRef = useRef(0)
   const pactCompleteRef = useRef(false)
+  const consentAcceptedThisSessionRef = useRef(false)
   const portalVideoRef = useRef<HTMLVideoElement | null>(null)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const memoryRef = useRef<GutoMemory | null>(null)
@@ -1007,13 +1036,16 @@ export function GutoApp({
         const storedVersion = parseInt(readStorageItem(userVersionKey) ?? "0", 10)
         const versionOutdated = storedVersion < STORAGE_VERSION
 
-        const shouldReset =
-          search.get("guto-reset") === "1" || forceResetParam || readStorageItem(DEBUG_RESET_KEY) === "1" || versionOutdated
+        const explicitReset =
+          search.get("guto-reset") === "1" || forceResetParam || readStorageItem(DEBUG_RESET_KEY) === "1"
 
-
-        if (shouldReset) {
+        if (explicitReset) {
           removeStorageItem(userStorageKey)
+          clearVolatileGutoStorage(currentUserId)
           removeStorageItem(DEBUG_RESET_KEY)
+          writeStorageItem(userVersionKey, String(STORAGE_VERSION))
+        } else if (versionOutdated) {
+          clearVolatileGutoStorage(currentUserId)
           writeStorageItem(userVersionKey, String(STORAGE_VERSION))
         } else {
           writeStorageItem(userVersionKey, String(STORAGE_VERSION))
@@ -1049,6 +1081,40 @@ export function GutoApp({
 
         if (cancelled) return
 
+        const onboardingIncomplete = !stored?.onboardingComplete && !stored?.pactAccepted
+        const persistedLanguage = readResolvedStoredLanguage({
+          scope: onboardingIncomplete ? "onboarding" : "private",
+          localProfileLanguage: stored?.language,
+          memoryLanguage: loadedMemory?.language,
+          fallbackLanguage: language,
+        })
+        if (process.env.NODE_ENV === "development") {
+          console.info("[GUTO_LANGUAGE] resolved after auth:", persistedLanguage)
+        }
+
+        const localPactDone = Boolean(stored?.onboardingComplete || stored?.pactAccepted)
+        if (
+          localPactDone &&
+          loadedMemory &&
+          hasMemoryConsent(loadedMemory) &&
+          hasCompleteGutoCalibration(loadedMemory) &&
+          !loadedMemory.initialXpGranted
+        ) {
+          const repairPayload: GutoMemoryPayload = {
+            userId: currentUserId,
+            language: persistedLanguage,
+            xpEvent: "grant_initial_xp",
+          }
+          const repairedName = firstRealGutoName(stored?.userName, loadedMemory.name)
+          if (repairedName) repairPayload.name = repairedName
+          try {
+            loadedMemory = await saveGutoMemory(repairPayload)
+            if (cancelled) return
+          } catch (error) {
+            console.warn(`Pacto do GUTO não reconciliado: ${getApiErrorMessage(error)}`)
+          }
+        }
+
         if (loadedMemory) {
           setMemory(loadedMemory)
           setEvolution(resolveEvolutionStage(loadedMemory.totalXp || 0))
@@ -1063,16 +1129,6 @@ export function GutoApp({
           }
         }
 
-        const onboardingIncomplete = !stored?.onboardingComplete && !stored?.pactAccepted
-        const persistedLanguage = readResolvedStoredLanguage({
-          scope: onboardingIncomplete ? "onboarding" : "private",
-          localProfileLanguage: stored?.language,
-          memoryLanguage: loadedMemory?.language,
-          fallbackLanguage: language,
-        })
-        if (process.env.NODE_ENV === "development") {
-          console.info("[GUTO_LANGUAGE] resolved after auth:", persistedLanguage)
-        }
         const resolvedProfile = resolveGutoProfile({
           user,
           stored,
@@ -1159,13 +1215,27 @@ export function GutoApp({
     }
 
     // AUTHENTICATED users flow: public stages are not repeated, but private onboarding cannot be skipped.
+    const guardStoredRaw = readStorageItem(`${STORAGE_KEY}-${user.userId}`)
+    let guardProfile: StoredProfile | null = null
+    try { guardProfile = guardStoredRaw ? JSON.parse(guardStoredRaw) as StoredProfile : null } catch { guardProfile = null }
+    const resolvedStage = resolveAuthenticatedStage(user, guardProfile, memory)
+
     if (!PRIVATE_STAGES.has(stage)) {
       clearPendingInviteStorage()
       setPendingInviteToken(null)
-      const guardStoredRaw = readStorageItem(`${STORAGE_KEY}-${user.userId}`)
-      let guardProfile: StoredProfile | null = null
-      try { guardProfile = guardStoredRaw ? JSON.parse(guardStoredRaw) as StoredProfile : null } catch { guardProfile = null }
-      setStage(resolveAuthenticatedStage(user, guardProfile, memory))
+      setStage(resolvedStage)
+      return
+    }
+
+    if (
+      resolvedStage !== stage &&
+      (
+        (stage === "calibration" && memory && hasMemoryCalibration(memory)) ||
+        (stage === "pact" && memory?.initialXpGranted) ||
+        (stage === "consent" && memory && hasMemoryConsent(memory))
+      )
+    ) {
+      setStage(resolvedStage)
       return
     }
   }, [authLoading, isHydrated, memory, router, stage, user])
@@ -1181,12 +1251,13 @@ export function GutoApp({
   }, [clearIntroSafetyTimer, stage])
 
   const startSystem = useCallback(
-    (finalName: string, finalLanguage: SupportedLanguage) => {
+    async (finalName: string, finalLanguage: SupportedLanguage) => {
       if (pactCompleteRef.current) return
       pactCompleteRef.current = true
       gutoAudio.stopGutoSound("hold_charge")
-      gutoAudio.playGutoFeedback("hold_complete")
+      setProfileSaveError(null)
 
+      gutoAudio.playGutoFeedback("hold_complete")
       effectRegistry.emit("whiteout")
       persistProfile({
         language: finalLanguage,
@@ -1194,12 +1265,6 @@ export function GutoApp({
         calibrationComplete: true,
         pactAccepted: true,
         onboardingComplete: true,
-      })
-      persistMemory({
-        name: finalName,
-        language: finalLanguage,
-        trainedToday: false,
-        xpEvent: "grant_initial_xp",
       })
       trackBehaviorEvent("pact_completed", { finalLanguage })
       setPactProgress(100)
@@ -1212,6 +1277,20 @@ export function GutoApp({
         setWhiteout(false)
         setPactProgress(0)
       }, 860)
+
+      void persistMemory({
+        name: finalName,
+        language: finalLanguage,
+        trainedToday: false,
+        xpEvent: "grant_initial_xp",
+      }, { optimistic: true }).then((updated) => {
+        if (updated) {
+          setMemory(updated)
+          setEvolution(resolveEvolutionStage(updated.totalXp || 0))
+        }
+      }).catch((error) => {
+        console.warn(`Pacto do GUTO sincronizado em segundo plano: ${getApiErrorMessage(error)}`)
+      })
       schedule(() => {
         void getGutoMemory().then((fresh) => {
           if (fresh) setMemory(fresh)
@@ -1237,6 +1316,7 @@ export function GutoApp({
       return
     }
     // Backend confirmou: espelha no estado em memória + cache local (UX), e avança.
+    consentAcceptedThisSessionRef.current = true
     memoryRef.current = updated
     setMemory(updated)
     persistProfile({
@@ -1250,6 +1330,28 @@ export function GutoApp({
     try { stored = storedRaw ? JSON.parse(storedRaw) as StoredProfile : null } catch { stored = null }
     setStage(resolveAuthenticatedStage(user, stored, updated))
   }, [persistProfile, selectedLanguage, user])
+
+  useEffect(() => {
+    if (stage !== "consent" || !user?.userId || !consentAcceptedThisSessionRef.current) return
+    const currentUser = user
+    let cancelled = false
+
+    void getGutoMemory()
+      .then((fresh) => {
+        if (cancelled || !hasMemoryConsent(fresh)) return
+        memoryRef.current = fresh
+        setMemory(fresh)
+        const storedRaw = readStorageItem(`${STORAGE_KEY}-${currentUser.userId}`)
+        let stored: StoredProfile | null = null
+        try { stored = storedRaw ? JSON.parse(storedRaw) as StoredProfile : null } catch { stored = null }
+        setStage(resolveAuthenticatedStage(currentUser, stored, fresh))
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [stage, user])
 
   // ── Unique completer: ONLY sets stage to language, never decides login/invite ─
   const completeIntroToLanguage = useCallback(() => {
@@ -1960,7 +2062,7 @@ export function GutoApp({
 
         if (next >= 100) {
           clearPactInterval()
-          startSystem(
+          void startSystem(
             committedName || formatGutoName(draftName || userName || ""),
             selectedLanguage
           )
@@ -2169,11 +2271,8 @@ export function GutoApp({
       initialXpGranted={memory?.initialXpGranted}
       initialXpRewardSeen={memory?.initialXpRewardSeen}
       onXpRewardSeen={() => {
-        if (memory) {
-          const updated = { ...memory, initialXpRewardSeen: true };
-          setMemory(updated);
-          persistMemory({ initialXpRewardSeen: true });
-        }
+        setMemory((prev) => prev ? { ...prev, initialXpRewardSeen: true } : prev)
+        persistMemory({ initialXpRewardSeen: true })
       }}
       onProfileUpdate={updateUserProfileField}
       onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
@@ -2264,6 +2363,7 @@ export function GutoApp({
             language={selectedLanguage}
             onFoodDoubt={handleFoodDoubt}
             memory={memory}
+            onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
           />
         )
       default:
@@ -2596,6 +2696,7 @@ export function GutoApp({
             <CalibrationScreen 
               language={selectedLanguage} 
               onComplete={handleCalibrationComplete} 
+              initialProfile={calibrationInitialProfileFromMemory(memory)}
             />
             {profileSaveError && (
               <div className="absolute inset-x-8 bottom-[max(env(safe-area-inset-bottom),1rem)] rounded-[18px] border border-[rgba(255,60,60,0.24)] bg-[rgba(255,60,60,0.08)] px-4 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.5)]">
