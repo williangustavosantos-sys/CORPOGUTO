@@ -32,16 +32,6 @@ describe("ChatTab operational state", () => {
     assert.match(chatTabSource, /turnId:\s*nextPendingTurn\.turnId/)
   })
 
-  it("aguarda persistência do contexto, confirma o chip e nunca encerra correlação inválida sem fallback", () => {
-    assert.match(chatTabSource, /await activeContextWriteRef\.current/)
-    assert.match(chatTabSource, /activeContextActivationRef/)
-    assert.match(chatTabSource, /activeContextActivationRef\.current === activationId/)
-    assert.match(chatTabSource, /const persisted = await setActiveContext\(context\)/)
-    assert.match(chatTabSource, /setContextChip\(\{\s*type: persisted\.type/)
-    assert.match(chatTabSource, /resolveGutoResponseForRender\(/)
-    assert.match(chatTabSource, /text: renderDecision\.speech/)
-  })
-
   it("alterar data fica no card ou Percurso sem mandar o usuário ao chat", () => {
     assert.doesNotMatch(chatTabSource, /changeProactiveMemoryDate/)
     assert.doesNotMatch(pathTabSource, /changeProactiveMemoryDate/)

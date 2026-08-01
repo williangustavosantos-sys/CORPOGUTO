@@ -23,7 +23,7 @@ export type ProactiveMemoryUiCopy = {
 
 const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
   "pt-BR": {
-    pendingConfirm: (label) => `Confirmar: ${label}`,
+    pendingConfirm: (label) => label,
     pendingTrip: "VIAGEM",
     pendingTripImpact: "VIAGEM",
     pendingValidate: (label) => `Validar: ${label}`,
@@ -48,7 +48,7 @@ const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
     btnKeepDate: "VOLTAR",
   },
   "en-US": {
-    pendingConfirm: (label) => `Confirm: ${label}`,
+    pendingConfirm: (label) => label,
     pendingTrip: "TRAVEL",
     pendingTripImpact: "TRAVEL",
     pendingValidate: (label) => `Validate: ${label}`,
@@ -73,7 +73,7 @@ const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
     btnKeepDate: "BACK",
   },
   "it-IT": {
-    pendingConfirm: (label) => `Conferma: ${label}`,
+    pendingConfirm: (label) => label,
     pendingTrip: "VIAGGIO",
     pendingTripImpact: "VIAGGIO",
     pendingValidate: (label) => `Valida: ${label}`,
@@ -127,41 +127,24 @@ export function formatProactiveWeekday(memory: ProactiveMemory, language: Suppor
   return value.charAt(0).toLocaleUpperCase(language) + value.slice(1)
 }
 
-const INTERNAL_PROACTIVE_LABEL_PATTERNS = [
-  /Evento proativo devido:/i,
-  /Prompt ativo:/i,
-  /Card pendente:/i,
-  /Treino já planejado para hoje:/i,
-  /Decida a fala/i,
-  /Não use culpa por streak/i,
-  /\bexpectedResponse\b/i,
-  /\bmemoryPatch\b/i,
-  /\bproactivityContext\b/i,
-  /\bWorldStateV?\d*\b/i,
-]
-
-function isInternalProactiveLabel(value?: string | null): boolean {
-  if (!value?.trim()) return true
-  return INTERNAL_PROACTIVE_LABEL_PATTERNS.some((pattern) => pattern.test(value))
-}
-
-function fallbackProactiveMemoryLabel(memory: ProactiveMemory): string {
-  if (memory.type === "trip") return "Viagem informada"
-  if (memory.type === "commitment") return "Compromisso informado"
-  if (memory.type === "schedule") return "Agenda informada"
-  return "Contexto informado"
-}
-
-function safeProactiveMemoryLabelBase(memory: ProactiveMemory): string {
-  for (const value of [memory.understood, memory.rawText]) {
-    const candidate = value?.replace(/\s+/g, " ").trim().replace(/:\s*$/, "")
-    if (candidate && !isInternalProactiveLabel(candidate)) return candidate
-  }
-  return fallbackProactiveMemoryLabel(memory)
-}
-
 export function formatProactiveMemoryLabel(memory: ProactiveMemory): string {
-  const base = safeProactiveMemoryLabelBase(memory)
+  const fallbackByType: Record<ProactiveMemory["type"], string> = {
+    trip: "Viagem",
+    commitment: "Compromisso",
+    schedule: "Agenda",
+    health: "Saúde",
+    other: "Contexto",
+  }
+  const rawBase = memory.understood?.trim() || memory.rawText?.trim() || fallbackByType[memory.type] || memory.type
+  const base = rawBase
+    .replace(/^confirmar:\s*/i, "")
+    .replace(/^compromisso informado:\s*.*$/i, "Compromisso")
+    .replace(/^viagem informada:\s*.*$/i, "Viagem")
+    .replace(/^contexto informado:\s*.*$/i, fallbackByType[memory.type] || "Contexto")
+    .replace(/\bEvento proativo devido:[^.\n]*\.?/gi, "")
+    .replace(/\bDecida a fala e a próxima ação[^.\n]*\.?/gi, "")
+    .replace(/\bNão use culpa por streak[^.\n]*\.?/gi, "")
+    .trim() || fallbackByType[memory.type] || memory.type
   const absoluteDate = memory.dateParsed ? formatProactiveDate(memory, "pt-BR") : null
   if (absoluteDate) return `${base} (${absoluteDate})`
   if (memory.dateText?.trim()) return `${base} (${memory.dateText.trim()})`
@@ -203,11 +186,15 @@ export function getActionableProactiveMemories(
   const pendingConfirmation = dedupeProactiveMemories(
     memories.filter((item) => {
       if (item.status !== "pending_confirmation") return false
-      // A viagem já foi extraída de uma fala real do usuário, mas ainda precisa
-      // de confirmação explícita. Esconder os estágios `event`/
-      // `continuity_question` deixava o backend com memória pendente e impacto
-      // ativo sem oferecer nenhuma ação correspondente no app.
-      return true
+      if (item.type !== "trip") return true
+      return (
+        item.stage === "impact_confirmation" ||
+        item.stage === "event_confirmation" ||
+        item.stage === "continuity_question" ||
+        item.confirmationStage === "impact" ||
+        item.confirmationStage === "event" ||
+        !item.stage
+      )
     })
   )
   const pendingValidation = dedupeProactiveMemories(

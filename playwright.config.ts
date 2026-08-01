@@ -45,17 +45,9 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: /calibration-pact-webkit\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 390, height: 844 }, // iPhone 14 Pro viewport
-      },
-    },
-    {
-      name: 'webkit-calibration-pact',
-      testMatch: /calibration-pact-webkit\.spec\.ts/,
-      use: {
-        ...devices['iPhone 15 Pro'],
       },
     },
   ],

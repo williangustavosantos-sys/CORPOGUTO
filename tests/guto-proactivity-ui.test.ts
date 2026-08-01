@@ -35,11 +35,14 @@ describe("guto proactivity UI", () => {
     assert.equal(actionable.pendingConfirmation[0]?.type, "trip")
   })
 
-  it("mostra confirmação da viagem real ainda no estágio do evento", () => {
-    const actionable = getActionableProactiveMemories([tripMemory({
-      stage: "continuity_question",
-      confirmationStage: "event",
-    })])
+  it("mostra card para viagem recem detectada antes da etapa de impacto", () => {
+    const actionable = getActionableProactiveMemories([
+      tripMemory({
+        stage: "continuity_question",
+        confirmationStage: "event",
+        understood: "Viagem informada: viajo amanhã",
+      }),
+    ])
 
     assert.equal(actionable.pendingConfirmation.length, 1)
     assert.equal(actionable.pendingConfirmation[0]?.stage, "continuity_question")
@@ -57,21 +60,25 @@ describe("guto proactivity UI", () => {
     assert.equal(formatProactiveMemoryLabel(tripMemory()), "Viagem provável em 2026-06-19 (19/06/2026)")
   })
 
-  it("nunca usa instrução interna como texto de card proativo", () => {
-    const leaked = "Compromisso informado: Evento proativo devido: arrival. Decida a fala e a próxima ação. Não use culpa por streak nem template de agenda."
-    const label = formatProactiveMemoryLabel(tripMemory({
+  it("nao vaza instrucao interna no titulo do card proativo", () => {
+    const leakedInstruction =
+      "Evento proativo devido: arrival. Decida a fala e a próxima ação. Não use culpa por streak nem template de agenda."
+    const memory = tripMemory({
       type: "commitment",
-      stage: "event_confirmation",
-      confirmationStage: undefined,
-      rawText: leaked,
-      understood: leaked,
+      rawText: leakedInstruction,
+      understood: `Compromisso informado: ${leakedInstruction}`,
       dateText: undefined,
       dateParsed: undefined,
-    }))
-    const visibleCardText = getProactiveMemoryUiCopy("pt-BR").pendingConfirm(label)
+    })
+    const label = formatProactiveMemoryLabel(memory)
+    const cardTitle = getProactiveMemoryUiCopy("pt-BR").pendingConfirm(label)
 
-    assert.equal(visibleCardText, "Confirmar: Compromisso informado")
-    assert.doesNotMatch(visibleCardText, /Evento proativo devido|Decida a fala|streak|expectedResponse|memoryPatch/i)
+    assert.equal(label, "Compromisso")
+    assert.equal(cardTitle, "Compromisso")
+    assert.doesNotMatch(
+      cardTitle,
+      /Confirmar:|Compromisso informado|Evento proativo|Decida a fala|streak|template de agenda/i
+    )
   })
 
   it("deduplica cards iguais e mostra só um contexto principal", () => {

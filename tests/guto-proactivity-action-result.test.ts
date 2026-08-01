@@ -71,7 +71,7 @@ describe("proactivity action result UI", () => {
     assert.equal(label, "Viagem amanhã (19/06/2026)")
   })
 
-  it("mostra um único card nos estágios de confirmação do evento e do impacto", () => {
+  it("mostra card confirmável tanto no evento detectado quanto no impacto", () => {
     const base: ProactiveMemory = {
       id: "pm-stage",
       userId: "user-1",

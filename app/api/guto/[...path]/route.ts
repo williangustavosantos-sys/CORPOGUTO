@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server"
+import { isGutoProxyHostAllowed } from "@/lib/api/guto-proxy-host"
 
 const BACKEND_URL = (
   process.env.GUTO_BACKEND_PROXY_URL ||
@@ -6,17 +7,8 @@ const BACKEND_URL = (
   process.env.NEXT_PUBLIC_API_URL ||
   ""
 ).replace(/\/+$/, "")
-const PREVIEW_HOST_SUFFIX = ".vercel.app"
-const PRODUCTION_HOSTS = new Set(["corpoguto.vercel.app"])
-
 type RouteContext = {
   params: Promise<{ path?: string[] }>
-}
-
-function isProxyHostAllowed(hostHeader: string | null) {
-  const host = (hostHeader || "").split(":")[0]?.toLowerCase() || ""
-  if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0") return true
-  return host.endsWith(PREVIEW_HOST_SUFFIX) && !PRODUCTION_HOSTS.has(host)
 }
 
 async function proxyToBackend(request: NextRequest, context: RouteContext) {
@@ -24,7 +16,7 @@ async function proxyToBackend(request: NextRequest, context: RouteContext) {
     return Response.json({ message: "Backend proxy sem URL configurada." }, { status: 500 })
   }
 
-  if (!isProxyHostAllowed(request.headers.get("host"))) {
+  if (!isGutoProxyHostAllowed(request.headers.get("host"))) {
     return Response.json({ message: "Proxy GUTO indisponível neste host." }, { status: 404 })
   }
 

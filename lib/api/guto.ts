@@ -55,7 +55,6 @@ export type GutoTelemetryEvent =
   | "user_returned_next_day"
   | "calibration_completed"
   | "guto_online_session_event"
-  | "stale_context_response_discarded"
 
 export interface GutoWorkoutExercise {
   id: string
@@ -186,42 +185,6 @@ export interface ActiveConversationContext {
   updatedAt: string
 }
 
-export type ActiveContextType = "workout" | "diet"
-
-export interface ActiveContextItem {
-  id: string
-  name: string
-  position?: number
-  workoutId?: string
-  mealId?: string
-  mealName?: string
-  quantity?: string
-  nutritionalRole?: string
-  sets?: number
-  reps?: string
-  rest?: string
-}
-
-export interface ActiveContext {
-  id: string
-  version: number
-  type: ActiveContextType
-  sourceSurface: "mission" | "diet"
-  originalItem: ActiveContextItem
-  currentItem: ActiveContextItem
-  lastSuggestedItem?: ActiveContextItem | null
-  rejectedItems: ActiveContextItem[]
-  acceptedItem?: ActiveContextItem | null
-  createdAt: string
-  updatedAt: string
-}
-
-export interface GutoLastSuggestedItem {
-  id: string
-  name: string
-  kind: "exercise" | "food"
-}
-
 export interface SendGutoMessageRequest {
   profile: {
     name: string
@@ -238,12 +201,6 @@ export interface SendGutoMessageRequest {
   }[]
   expectedResponse?: GutoExpectedResponse | null
   turnId: string
-  requestId: string
-  contextId: string | null
-  contextVersion: number | null
-  activeContextType: ActiveContextType | null
-  activeItemId: string | null
-  lastSuggestedItem: GutoLastSuggestedItem | null
 }
 
 export type ProactiveMemoryStage =
@@ -283,13 +240,6 @@ export interface GutoAtomicTurnDecision {
 
 export interface SendGutoMessageResponse {
   turnId?: string
-  requestId?: string
-  contextId?: string | null
-  contextVersion?: number | null
-  activeContextType?: ActiveContextType | null
-  activeItemId?: string | null
-  activeContext?: ActiveContext | null
-  discardedReason?: "stale_context"
   fala?: string
   acao?: GutoAction
   expectedResponse?: GutoExpectedResponse | null
@@ -309,7 +259,6 @@ export interface GutoNameValidation {
 export interface GutoMemory {
   userId: string
   name: string
-  sovereignNameConfirmedAt?: string
   language: SupportedLanguage
   initialXpGranted: boolean
   totalXp: number
@@ -351,14 +300,10 @@ export interface GutoMemory {
   }[]
   lastLimitationCheckAt?: string
   lastWorkoutPlan?: GutoWorkoutPlan | null
-  lastDietPlan?: DietPlan | null
-  activeContext?: ActiveContext | null
-  contextHistory?: ActiveContext[]
   proactiveMemories?: ProactiveMemory[]
   proactiveImpacts?: ProactiveImpact[]
   proactivePrompt?: ProactivePrompt | null
   activeConversationContext?: ActiveConversationContext | null
-  dietConsistencyStatus?: "consistent" | "reconciliation_pending"
   dietGenerationStatus?: "idle" | "ready_to_generate" | "generating" | "generated" | "needs_clarification" | "failed"
   weeklyWorkoutPlan?: {
     studentId: string
@@ -414,7 +359,6 @@ export interface GutoResolvedProfileFields {
 export interface GutoProactiveResponse {
   due: boolean
   slot?: string
-  deliveryCommitted?: boolean
   fala?: string
   acao?: GutoAction
   expectedResponse?: GutoExpectedResponse | null
@@ -457,15 +401,11 @@ export interface DietMeal {
 
 export interface DietPlan {
   userId: string
-  revision?: string
-  profileFingerprint?: string
   title?: string
   // Idioma em que o conteúdo visível foi gerado ("idioma é lei": regenera se mudar).
   language?: string
   generatedAt: string
   country: string
-  countryCode?: string
-  city?: string
   macros: DietMacros
   meals: DietMeal[]
   goal?: string
@@ -486,9 +426,7 @@ export interface DietPlan {
 export async function sendGutoMessage(payload: SendGutoMessageRequest) {
   return apiRequest<SendGutoMessageResponse>("/guto", {
     method: "POST",
-    // A diet action can legitimately consume the same validated retry budget
-    // as POST /guto/diet/generate (up to ~60s).
-    timeoutMs: 70000,
+    timeoutMs: 35000,
     body: JSON.stringify(payload),
   })
 }
@@ -517,11 +455,6 @@ export async function validateGutoName(name: string, userId?: string) {
   })
 }
 
-// A memória soberana resolve o snapshot compartilhado no backend antes de ler
-// ou gravar. Em cold start e sob contenção essa operação ultrapassa 15 s.
-export const GUTO_MEMORY_IO_TIMEOUT_MS = 60_000
-export const GUTO_MEMORY_SAVE_TIMEOUT_MS = GUTO_MEMORY_IO_TIMEOUT_MS
-
 export async function saveGutoMemory(payload: {
   userId?: string
   name?: string
@@ -545,13 +478,11 @@ export async function saveGutoMemory(payload: {
   weightKg?: number
   foodRestrictions?: string
   confirmedName?: boolean
-  sovereignNameConfirmed?: boolean
   initialXpRewardSeen?: boolean
   lastWorkoutPlan?: GutoWorkoutPlan | null
 }) {
   return apiRequest<GutoMemory>("/guto/memory", {
     method: "POST",
-    timeoutMs: GUTO_MEMORY_IO_TIMEOUT_MS,
     body: JSON.stringify(payload),
   })
 }
@@ -559,7 +490,6 @@ export async function saveGutoMemory(payload: {
 export async function getGutoMemory() {
   return apiRequest<GutoMemory>(`/guto/memory`, {
     method: "GET",
-    timeoutMs: GUTO_MEMORY_IO_TIMEOUT_MS,
   })
 }
 
@@ -654,9 +584,7 @@ export async function getGutoProactive({
 
   return apiRequest<GutoProactiveResponse>(`/guto/proactive?${params.toString()}`, {
     method: "GET",
-    // First arrival may spend ~30s in the sovereign decision and up to 18s in
-    // catalog curation before it can atomically commit the mission.
-    timeoutMs: 60000,
+    timeoutMs: 30000,
     suppressAuthRedirect: true,
   })
 }
@@ -695,70 +623,23 @@ export async function getArenaMe(userId: string) {
 
 // ─── Diet API ─────────────────────────────────────────────────────────────────
 
-export const GUTO_DIET_READ_TIMEOUT_MS = 60_000
-
 export async function getDietPlan() {
   try {
     return await apiRequest<DietPlan>(`/guto/diet`, {
       method: "GET",
-      // A cold sovereign backend can exceed the generic 15 s client ceiling.
-      // Keep the read alive so opening Dieta does not create an aborted request.
-      timeoutMs: GUTO_DIET_READ_TIMEOUT_MS,
     })
   } catch (err) {
-    if (
-      err instanceof ApiError &&
-      err.status === 404 &&
-      typeof err.details === "object" &&
-      err.details !== null &&
-      (err.details as { error?: unknown }).error === "diet_not_found"
-    ) return null
+    if (err instanceof ApiError && err.status === 404) return null
     throw err
   }
 }
 
-type GutoDietSingleFlightGlobal = typeof globalThis & {
-  __gutoDietGenerationInFlight?: Map<string, Promise<DietPlan>>
-}
-
-// ChatTab and DietTab may live in separate Next.js client chunks. Keeping the
-// registry on globalThis guarantees one browser-wide flight even if the module
-// is instantiated once per chunk during development/HMR.
-const dietSingleFlightGlobal = globalThis as GutoDietSingleFlightGlobal
-const dietGenerationInFlight = dietSingleFlightGlobal.__gutoDietGenerationInFlight
-  ?? new Map<string, Promise<DietPlan>>()
-dietSingleFlightGlobal.__gutoDietGenerationInFlight = dietGenerationInFlight
-
-export function generateDietPlan(language: SupportedLanguage = "pt-BR", userId?: string) {
-  const singleFlightKey = `${userId || "current-user"}:${language}`
-  const activeRequest = dietGenerationInFlight.get(singleFlightKey)
-  if (activeRequest) return activeRequest
-
-  const sharedRequest = apiRequest<DietPlan>("/guto/diet/generate", {
+export async function generateDietPlan(language: SupportedLanguage = "pt-BR") {
+  return apiRequest<DietPlan>("/guto/diet/generate", {
     method: "POST",
-    // Backend can make up to three validated 20s attempts before the
-    // deterministic fallback. Keep the client alive beyond that budget so an
-    // abort never releases the server lease while generation still runs.
-    timeoutMs: 70000,
+    timeoutMs: 45000,
     body: JSON.stringify({ language }),
   })
-  void sharedRequest.then(() => {
-    // Keep the fulfilled promise briefly: React effect remounts and the Chat →
-    // Diet handoff can be sequential by a few milliseconds even though they
-    // represent the same generation intent. A short success grace window
-    // prevents a second POST while still allowing an explicit later regenerate.
-    setTimeout(() => {
-      if (dietGenerationInFlight.get(singleFlightKey) === sharedRequest) {
-        dietGenerationInFlight.delete(singleFlightKey)
-      }
-    }, 1_500)
-  }, () => {
-    if (dietGenerationInFlight.get(singleFlightKey) === sharedRequest) {
-      dietGenerationInFlight.delete(singleFlightKey)
-    }
-  })
-  dietGenerationInFlight.set(singleFlightKey, sharedRequest)
-  return sharedRequest
 }
 
 // ─── Proactivity API ──────────────────────────────────────────────────────────
@@ -916,7 +797,6 @@ export async function extractProactivityEvents(
       {
         method: "POST",
         suppressAuthRedirect: true,
-        timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
         body: JSON.stringify({ conversationText, language }),
       }
     )
@@ -935,7 +815,6 @@ export async function openWeeklyConversation(): Promise<void> {
     await apiRequest("/guto/proactivity/open-weekly", {
       method: "POST",
       suppressAuthRedirect: true,
-      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({}),
     })
   } catch {
@@ -946,17 +825,11 @@ export async function openWeeklyConversation(): Promise<void> {
 /**
  * Returns active proactive memories for the current user.
  */
-export const GUTO_PROACTIVITY_READ_TIMEOUT_MS = 60_000
-
 export async function getProactiveMemories(): Promise<ProactiveMemory[]> {
   try {
     const result = await apiRequest<{ memories: ProactiveMemory[] }>(
       "/guto/proactivity/memories",
-      {
-        method: "GET",
-        suppressAuthRedirect: true,
-        timeoutMs: GUTO_PROACTIVITY_READ_TIMEOUT_MS,
-      }
+      { method: "GET", suppressAuthRedirect: true }
     )
     return result.memories ?? []
   } catch {
@@ -965,7 +838,6 @@ export async function getProactiveMemories(): Promise<ProactiveMemory[]> {
 }
 
 const failedProactivityAction: GutoProactivityActionResult = { ok: false }
-export const GUTO_PROACTIVITY_ACTION_TIMEOUT_MS = 60_000
 
 export async function confirmProactiveMemory(
   memoryId: string,
@@ -974,7 +846,6 @@ export async function confirmProactiveMemory(
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/confirm", {
       method: "POST",
-      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId, ...(typeof trainingAdapted === "boolean" ? { trainingAdapted } : {}) }),
     })
     return result
@@ -990,7 +861,6 @@ export async function discardProactiveMemory(
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/discard", {
       method: "POST",
-      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId, confirmedByUser }),
     })
     return result
@@ -1003,7 +873,6 @@ export async function changeProactiveMemoryDate(memoryId: string): Promise<GutoP
   try {
     return await apiRequest<GutoProactivityActionResult>("/guto/proactivity/change-date", {
       method: "POST",
-      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId }),
     })
   } catch {
@@ -1018,7 +887,6 @@ export async function updateProactiveMemory(
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/update", {
       method: "POST",
-      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId, patch }),
     })
     return result
@@ -1034,7 +902,6 @@ export async function validateProactiveMemory(
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/validate", {
       method: "POST",
-      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId, outcome }),
     })
     return result
@@ -1047,7 +914,6 @@ export async function requestDiscardProactiveMemory(memoryId: string): Promise<G
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/request-discard", {
       method: "POST",
-      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId }),
     })
     return result
@@ -1060,7 +926,6 @@ export async function cancelDiscardRequest(memoryId: string): Promise<GutoProact
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/cancel-discard-request", {
       method: "POST",
-      timeoutMs: GUTO_PROACTIVITY_ACTION_TIMEOUT_MS,
       body: JSON.stringify({ memoryId }),
     })
     return result
@@ -1104,12 +969,4 @@ export async function clearActiveExercise(): Promise<void> {
   } catch {
     // silencioso.
   }
-}
-
-export async function setActiveContext(context: ActiveContext | null): Promise<ActiveContext | null> {
-  const result = await apiRequest<{ ok: true; activeContext: ActiveContext | null }>("/guto/active-context", {
-    method: "POST",
-    body: JSON.stringify({ context }),
-  })
-  return result.activeContext
 }

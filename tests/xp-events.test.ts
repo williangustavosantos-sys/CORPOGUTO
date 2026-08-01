@@ -3,8 +3,9 @@ import assert from "node:assert/strict"
 import { sumXpForDay } from "../lib/xp-events"
 import type { GutoMemory } from "../lib/api/guto"
 
-// O Percurso lê o ledger real, mas exclui o buffer do Pacto: ele não representa
-// presença validada nem pode criar log de treino (AR-5/X-4).
+// Bug DUDAAA: 100 XP do pacto apareciam em Evolução/Arena Individual, mas o
+// Percurso mostrava "0 XP hoje" — o componente usava literais derivados de
+// flags de validação em vez de ler o ledger memory.xpEvents.
 
 type XpEvent = GutoMemory["xpEvents"][number]
 
@@ -20,9 +21,9 @@ function event(partial: Partial<XpEvent>): XpEvent {
 }
 
 describe("sumXpForDay — XP real do dia a partir do ledger", () => {
-  it("pacto de 100 XP datado hoje não cria XP no Percurso", () => {
+  it("pacto de 100 XP datado hoje conta como XP de hoje", () => {
     const memory = { xpEvents: [event({ type: "grant_initial_xp", amount: 100, date: "2026-06-11" })] }
-    assert.equal(sumXpForDay(memory, "2026-06-11"), 0)
+    assert.equal(sumXpForDay(memory, "2026-06-11"), 100)
   })
 
   it("evento legado com date=\"lifetime\" não conta em nenhum dia", () => {

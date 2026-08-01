@@ -1,4 +1,4 @@
-import { test, expect, Page, Route } from '@playwright/test'
+import { test, expect, Page } from '@playwright/test'
 import path from 'path'
 import fs from 'fs'
 
@@ -17,6 +17,7 @@ async function snap(page: Page, name: string) {
 
 const TEST_USER_ID = 'qa-test-user-001'
 const TEST_TOKEN = 'qa-fake-token-playwright'
+const CURRENT_STORAGE_VERSION = 3
 // API URL from .env.local (NEXT_PUBLIC_API_URL)
 const API_BASE = 'https://cerebroguto.onrender.com'
 
@@ -111,16 +112,6 @@ const mockMemory = {
   },
 }
 
-type MockMemoryWithOptionalArtifacts = Omit<typeof mockMemory, 'lastWorkoutPlan'> & {
-  lastWorkoutPlan?: typeof mockMemory.lastWorkoutPlan
-  weeklyWorkoutPlan?: unknown
-  weeklyDietPlan?: unknown
-  dietGenerationStatus: string
-  hasSeenChatOpening: boolean
-  proactiveMemories?: unknown[]
-  proactiveImpacts?: unknown[]
-}
-
 const mockDiet = {
   userId: TEST_USER_ID,
   title: 'Dieta da Semana — Hipertrofia',
@@ -174,26 +165,6 @@ const jsonBody = (body: unknown) => ({
   body: JSON.stringify(body),
 })
 
-function correlatedGutoBody(route: Route, body: Record<string, unknown>) {
-  const request = route.request().postDataJSON() as {
-    turnId?: string
-    requestId?: string
-    contextId?: string | null
-    contextVersion?: number | null
-    activeContextType?: 'workout' | 'diet' | null
-    activeItemId?: string | null
-  }
-  return jsonBody({
-    ...body,
-    turnId: request.turnId,
-    requestId: request.requestId,
-    contextId: request.contextId ?? null,
-    contextVersion: request.contextVersion ?? null,
-    activeContextType: request.activeContextType ?? null,
-    activeItemId: request.activeItemId ?? null,
-  })
-}
-
 function toDateKey(date: Date) {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -240,7 +211,7 @@ async function setupApiMocks(page: Page) {
   // só intercepta POST e não engole /guto/memory, /guto/diet, etc.
   await onPath('/guto', (route) => {
     if (route.request().method() === 'POST') {
-      return route.fulfill(correlatedGutoBody(route, {
+      return route.fulfill(jsonBody({
         fala: 'Boa, QA! Treino montado e dieta calibrada. Bora, dupla!',
         acao: 'none',
         avatarEmotion: 'default',
@@ -269,7 +240,7 @@ async function injectAuthStorage(page: Page) {
     {
       token: TEST_TOKEN,
       userId: TEST_USER_ID,
-      storageVersion: 2,
+      storageVersion: CURRENT_STORAGE_VERSION,
       profile: {
         language: 'pt-BR',
         userName: 'QA',
@@ -452,255 +423,7 @@ test.describe('GUTO – Fluxos críticos', () => {
     expect(bodyText).not.toMatch(/Como posso te ajudar hoje/i)
   })
 
-  test('10c — dieta persistida é visível sem depender de missão', async ({ page }) => {
-    await injectAuthStorage(page)
-    await setupApiMocks(page)
-
-    const newUserMemory: MockMemoryWithOptionalArtifacts = {
-      ...mockMemory,
-      totalXp: 100,
-      streak: 0,
-      initialXpRewardSeen: true,
-      hasSeenChatOpening: false,
-      lastWorkoutPlan: undefined,
-      weeklyWorkoutPlan: undefined,
-      weeklyDietPlan: undefined,
-      dietGenerationStatus: 'idle',
-      proactiveMemories: [],
-      proactiveImpacts: [],
-    }
-    let dietGenerateCalls = 0
-    let arrivalCalls = 0
-    let memoryGetCalls = 0
-    let dietGetCalls = 0
-
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) => {
-      memoryGetCalls += 1
-      return route.fulfill(jsonBody(newUserMemory))
-    })
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) => {
-      dietGetCalls += 1
-      // Contrato oficial: uma dieta válida não deixa de existir quando a missão
-      // está ausente ou sendo reidratada por outro caminho.
-      return route.fulfill(jsonBody(mockDiet))
-    })
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
-      dietGenerateCalls += 1
-      return route.fulfill(jsonBody(mockDiet))
-    })
-    await page.route((url) => isApiCall(url) && url.pathname.includes('/guto/proactive'), (route) => {
-      arrivalCalls += 1
-      return route.fulfill(jsonBody({
-        due: true,
-        slot: 'arrival',
-        deliveryCommitted: false,
-        fala: 'QA, estou fechando tua primeira missão com o que você me passou.',
-        acao: 'updateWorkout',
-        expectedResponse: null,
-        avatarEmotion: 'default',
-        workoutPlan: mockMemory.lastWorkoutPlan,
-        memoryPatch: {
-          lastWorkoutPlan: mockMemory.lastWorkoutPlan,
-        },
-      }))
-    })
-
-    await page.goto('/')
-    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
-    await expect(page.getByText(/estou fechando tua primeira missão/i)).toBeVisible({ timeout: 10000 })
-    await page.waitForTimeout(1000)
-
-    expect(dietGenerateCalls).toBe(0)
-    expect(arrivalCalls).toBeGreaterThanOrEqual(1)
-
-    const arrivalCallsBeforeReload = arrivalCalls
-    await page.reload()
-    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
-    await expect.poll(() => arrivalCalls, { timeout: 10000 }).toBeGreaterThan(arrivalCallsBeforeReload)
-
-    await page.getByRole('button', { name: 'MISSÃO' }).click()
-    await expect(page.getByText(/Supino Reto com Barra/i)).toHaveCount(0)
-
-    await page.getByRole('button', { name: 'DIETA' }).click()
-    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 10000 })
-    expect(dietGenerateCalls).toBe(0)
-    expect(memoryGetCalls).toBeGreaterThan(0)
-    expect(dietGetCalls).toBeGreaterThan(0)
-  })
-
-  test('10d — chegada aplica missão persistida sem disparar geração de dieta no cliente', async ({ page }) => {
-    await injectAuthStorage(page)
-    await setupApiMocks(page)
-
-    const newUserMemory: MockMemoryWithOptionalArtifacts = {
-      ...mockMemory,
-      totalXp: 100,
-      streak: 0,
-      hasSeenChatOpening: false,
-      lastWorkoutPlan: undefined,
-      weeklyWorkoutPlan: undefined,
-      weeklyDietPlan: undefined,
-      dietGenerationStatus: 'generated',
-    }
-    let dietGenerateCalls = 0
-
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
-      route.fulfill(jsonBody(newUserMemory))
-    )
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
-      route.fulfill(jsonBody(mockDiet))
-    )
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
-      dietGenerateCalls += 1
-      return route.fulfill(jsonBody(mockDiet))
-    })
-    await page.route((url) => isApiCall(url) && url.pathname.includes('/guto/proactive'), (route) => {
-      if (newUserMemory.hasSeenChatOpening) {
-        return route.fulfill(jsonBody({ due: false }))
-      }
-
-      newUserMemory.hasSeenChatOpening = true
-      newUserMemory.lastWorkoutPlan = mockMemory.lastWorkoutPlan
-      return route.fulfill(jsonBody({
-        due: true,
-        slot: 'arrival',
-        deliveryCommitted: true,
-        fala: 'Finalmente, QA. Tua primeira missão está pronta. Bora?',
-        acao: 'updateWorkout',
-        expectedResponse: null,
-        workoutPlan: mockMemory.lastWorkoutPlan,
-        memoryPatch: {
-          lastWorkoutPlan: mockMemory.lastWorkoutPlan,
-        },
-      }))
-    })
-
-    await page.goto('/')
-    await expect(page.getByText(/tua primeira missão está pronta/i)).toBeVisible({ timeout: 10000 })
-    expect(dietGenerateCalls).toBe(0)
-
-    await page.getByRole('button', { name: 'MISSÃO' }).click()
-    await expect(page.getByText(/Supino Reto com Barra/i)).toBeVisible({ timeout: 10000 })
-    await page.getByRole('button', { name: 'DIETA' }).click()
-    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 10000 })
-    expect(dietGenerateCalls).toBe(0)
-  })
-
-  test('10e — aba não mascara bootstrap incompleto com geração automática', async ({ page }) => {
-    await injectAuthStorage(page)
-    await setupApiMocks(page)
-
-    const orphanGeneratingMemory = {
-      ...mockMemory,
-      dietGenerationStatus: 'generating',
-    }
-    let dietGenerateCalls = 0
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
-      route.fulfill(jsonBody(orphanGeneratingMemory))
-    )
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
-      route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'diet_not_found' }) })
-    )
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
-      dietGenerateCalls += 1
-      return route.fulfill(jsonBody(mockDiet))
-    })
-
-    await page.goto('/')
-    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
-    await page.getByRole('button', { name: 'DIETA' }).click()
-    await expect(page.getByRole('button', { name: 'REGENERAR DIETA' })).toBeVisible({ timeout: 10000 })
-    expect(dietGenerateCalls).toBe(0)
-  })
-
-  test('10f — ausência de dieta permanece independente do treino', async ({ page }) => {
-    await injectAuthStorage(page)
-    await setupApiMocks(page)
-
-    const memoryWithoutMission = {
-      ...mockMemory,
-      lastWorkoutPlan: undefined,
-      weeklyWorkoutPlan: undefined,
-      dietGenerationStatus: 'idle',
-    }
-    let dietGenerateCalls = 0
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
-      route.fulfill(jsonBody(memoryWithoutMission))
-    )
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
-      route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'diet_not_found' }) })
-    )
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
-      dietGenerateCalls += 1
-      return route.fulfill(jsonBody(mockDiet))
-    })
-
-    await page.goto('/')
-    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
-    await page.getByRole('button', { name: 'DIETA' }).click()
-    await expect(page.getByRole('button', { name: 'REGENERAR DIETA' })).toBeVisible({ timeout: 10000 })
-    expect(dietGenerateCalls).toBe(0)
-  })
-
-  test('10g — retry gera dieta mesmo quando não existe missão', async ({ page }) => {
-    await injectAuthStorage(page)
-    await setupApiMocks(page)
-
-    const memoryWithoutMission = {
-      ...mockMemory,
-      lastWorkoutPlan: undefined,
-      weeklyWorkoutPlan: undefined,
-      dietGenerationStatus: 'idle',
-    }
-    let dietGenerateCalls = 0
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
-      route.fulfill(jsonBody(memoryWithoutMission))
-    )
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
-      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'temporary_failure' }) })
-    )
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
-      dietGenerateCalls += 1
-      return route.fulfill(jsonBody(mockDiet))
-    })
-
-    await page.goto('/')
-    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
-    await page.getByRole('button', { name: 'DIETA' }).click()
-    const retryButton = page.getByRole('button', { name: 'REGENERAR DIETA' })
-    await expect(retryButton).toBeVisible({ timeout: 10000 })
-    await retryButton.click()
-    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 10000 })
-    expect(dietGenerateCalls).toBe(1)
-  })
-
-  test('10h — dieta soberana antiga do coach continua visível e não regenera', async ({ page }) => {
-    await injectAuthStorage(page)
-    await setupApiMocks(page)
-
-    const oldCoachDiet = {
-      ...mockDiet,
-      generatedAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-      lockedByCoach: true,
-      source: 'coach_manual',
-    }
-    let dietGenerateCalls = 0
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
-      route.fulfill(jsonBody(oldCoachDiet))
-    )
-    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
-      dietGenerateCalls += 1
-      return route.fulfill(jsonBody(mockDiet))
-    })
-
-    await page.goto('/')
-    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
-    await page.getByRole('button', { name: 'DIETA' }).click()
-    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 10000 })
-    expect(dietGenerateCalls).toBe(0)
-  })
-
-  test('10i — card interno do chat mostra apenas GUTO, sem duplicar a dupla', async ({ page }) => {
+  test('10c — card interno do chat mostra apenas GUTO, sem duplicar a dupla', async ({ page }) => {
     await injectAuthStorage(page)
     await setupApiMocks(page)
     await page.goto('/')
@@ -1180,7 +903,7 @@ test.describe('GUTO – Fluxos críticos', () => {
       const body = route.request().postDataJSON() as { input?: string }
       seenInputs.push(body.input || '')
       if (seenInputs.length === 1) {
-        return route.fulfill(correlatedGutoBody(route, {
+        return route.fulfill(jsonBody({
           fala: 'Consigo adaptar para 20-30 minutos. Você consegue treinar?',
           acao: 'none',
           avatarEmotion: 'alert',
@@ -1193,7 +916,7 @@ test.describe('GUTO – Fluxos críticos', () => {
         }))
       }
       cardPending = true
-      return route.fulfill(correlatedGutoBody(route, {
+      return route.fulfill(jsonBody({
         fala: 'Confirma no card e eu já sigo organizando tua semana.',
         acao: 'none',
         avatarEmotion: 'default',

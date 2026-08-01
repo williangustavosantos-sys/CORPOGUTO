@@ -121,19 +121,22 @@ export class DietPlanValidationError extends Error {
   }
 }
 
-export function sanitizeDietPlan(plan: DietPlan, _memory: GutoMemory | null): DietPlan {
-  void _memory
+export function sanitizeDietPlan(plan: DietPlan, memory: GutoMemory | null): DietPlan {
   if (plan.lockedByCoach || plan.manualOverride || plan.source === "coach_manual" || plan.source === "mixed") {
     return plan
   }
 
   // O backend é a fonte de verdade da dieta: ele já valida calorias/macros
-  // e restrições contra o catálogo antes de devolver 200. O front NÃO pode
-  // redecidir por texto se "iogurte de soja sem lactose" é laticínio: isso criou
-  // um segundo decisor, rejeitando o plano soberano válido no pós-pacto. Mantemos
-  // a checagem numérica apenas como telemetria; segurança alimentar continua no
-  // trilho autoritativo do backend.
+  // (tolerância ±80 kcal/dia + soma exata por refeição) e estrutura antes de
+  // devolver 200. O front NÃO pode re-rejeitar por uma tolerância mais apertada
+  // (±10 kcal) — isso barrava planos válidos com o falso "falhou na checagem
+  // final". Mantemos validateDietPlan só como telemetria (dev) e preservamos o
+  // bloqueio de RESTRIÇÃO ALIMENTAR como rede de segurança real.
   logValidation(validateDietPlan(plan))
+  const violatesDietLimits = memory ? planViolatesDietLimits(plan, memory) : false
+  if (violatesDietLimits) {
+    throw new DietPlanValidationError("restriction_violation")
+  }
   return plan
 }
 
@@ -276,6 +279,30 @@ function filterFoodKeysForDietLimits(keys: string[], memory?: GutoMemory): strin
 function rebalanceDistribution(length: number): number[] {
   if (length <= 1) return [1]
   return Array.from({ length }, () => 1 / length)
+}
+
+function planViolatesDietLimits(plan: DietPlan, memory: GutoMemory): boolean {
+  const limits = getDietLimits(memory)
+  if (!limits.dairy && !limits.vegan && !limits.vegetarian && !limits.gluten) return false
+
+  const foodNames = plan.meals
+    .flatMap((meal) => meal.foods.map((food) => food.name))
+    .map((name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase())
+
+  const lactoseSafeQualifier = /\b(sem\s+lactose|zero\s+lactose|lactose\s*free|de\s+soja|soja|vegetal|vegano|vegana|vegan|plant.?based)\b/i
+  const hasDairy = foodNames.some((name) =>
+    /\b(iogurte|yogurt|yoghurt|parmes|queijo|cheese|milk|leite|latte|formagg|dairy)\b/i.test(name) &&
+    !lactoseSafeQualifier.test(name)
+  )
+  const hasMeat = foodNames.some((name) => /\b(frango|chicken|pollo)\b/i.test(name))
+  const hasEggs = foodNames.some((name) => /\b(ovo|ovos|egg|eggs|uova)\b/i.test(name))
+  const hasGluten = foodNames.some((name) => /\b(macarrao|pasta|aveia|oats|gluten)\b/i.test(name))
+
+  if (limits.vegan && (hasDairy || hasMeat || hasEggs)) return true
+  if (limits.vegetarian && hasMeat) return true
+  if (limits.dairy && hasDairy) return true
+  if (limits.gluten && hasGluten) return true
+  return false
 }
 
 function buildFoods(mealKcal: number, keys: string[], distribution: number[], language: SupportedLanguage): DietFood[] {
