@@ -3,31 +3,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Image from "next/image"
 import { AnimatePresence, motion } from "framer-motion"
-import { Loader2, Mic, Send, TrendingUp, Volume2, VolumeX } from "lucide-react"
+import { Dumbbell, Loader2, Mic, Plane, Send, TrendingUp, UtensilsCrossed, Volume2, VolumeX } from "lucide-react"
 
 import { getApiErrorMessage } from "@/lib/api/client"
 import {
+  buildGutoLastSuggestedItem,
+  buildGutoModelInputWithActiveContext,
+  resolveGutoResponseForRender,
+  shouldHydrateActiveContext,
+} from "@/lib/guto-context-correlation"
+import {
   cancelDiscardRequest,
-  clearActiveExercise,
   confirmProactiveMemory,
   discardProactiveMemory,
   extractProactivityEvents,
-  generateDietPlan,
   getGutoProactive,
   getProactiveMemories,
-  openWeeklyConversation,
   requestDiscardProactiveMemory,
   sendGutoMessage,
-  setActiveExercise,
+  setActiveContext,
   trackGutoEvent,
   updateProactiveMemory,
   validateProactiveMemory,
 } from "@/lib/api/guto"
 import type {
-  DietFood,
+  ActiveContext,
+  ActiveContextItem,
   DietMeal,
   GutoAvatarEmotion,
   GutoExpectedResponse,
+  GutoLastSuggestedItem,
   GutoMemory,
   GutoProactiveMemoryAction,
   GutoProactivityActionResult,
@@ -36,6 +41,8 @@ import type {
 } from "@/lib/api/guto"
 import {
   formatProactiveMemoryLabel,
+  formatProactiveDate,
+  formatProactiveWeekday,
   getActionableProactiveMemories,
   getProactiveMemoryUiCopy,
   hasActionableProactiveMemories,
@@ -49,6 +56,7 @@ import type { GutoVitalStateResult } from "@/lib/guto-vital-state"
 
 import { GutoAvatarController } from "../guto-avatar-controller"
 import { getLanguage, translations } from "../translations"
+import { persistXpRewardBeforeArrival } from "@/lib/guto-arrival"
 import type { MissionExercise } from "../view-models"
 import { gutoAudio } from "@/lib/audio-haptics"
 import { firstRealGutoName, hasCompleteGutoCalibration } from "@/lib/guto-profile"
@@ -74,7 +82,7 @@ interface ChatTabProps {
   vitalState?: GutoVitalStateResult
   initialXpGranted?: boolean
   initialXpRewardSeen?: boolean
-  onXpRewardSeen?: () => void
+  onXpRewardSeen?: () => void | Promise<void>
   memory?: GutoMemory | null
   onProfileUpdate?: (field: string, value: string | number) => Promise<void>
   onMemoryPatch?: (patch: Partial<GutoMemory>) => void
@@ -136,6 +144,21 @@ interface StoredChatState {
   messages: Message[]
   expectedResponse: GutoExpectedResponse | null
   expectedResponseMessageId: string | null
+  pendingTurn?: PendingChatTurn | null
+}
+
+interface PendingChatTurn {
+  turnId: string
+  requestId: string
+  contextId: string | null
+  contextVersion: number | null
+  activeContextType: "workout" | "diet" | null
+  activeItemId: string | null
+  lastSuggestedItem: GutoLastSuggestedItem | null
+  displayText: string
+  modelInput: string
+  language: SupportedLanguage
+  createdAt: string
 }
 
 const chatCopy: Record<
@@ -160,7 +183,13 @@ const chatCopy: Record<
     mealInputPlaceholder: string
     contextClear: string
     opening: (name: string) => string
-    weeklyOpening: (name: string) => string
+    conversationActive: string
+    visualMemoryHint: string
+    voiceOn: string
+    voiceOff: string
+    quickReplyLabel: string
+    cardBlockPrompt: string
+    dateInputLabel: string
   }
 > = {
   "pt-BR": {
@@ -186,7 +215,13 @@ const chatCopy: Record<
     mealInputPlaceholder: "Ex.: não tenho isso, quanto de substituto, trocar alimento…",
     contextClear: "Sair do contexto",
     opening: (name) => `Finalmente${name ? `, ${name}` : ""}. Tava te esperando. Enquanto isso, já organizei nosso plano daqui pra frente. Estamos juntos — bora começar?`,
-    weeklyOpening: (name) => `${name ? `${name}, ` : ""}antes da gente sair no automático: como tá tua semana? Me fala se tem viagem, horário apertado, dor ou algum compromisso que pode mexer no treino.`,
+    conversationActive: "Conversa ativa",
+    visualMemoryHint: "Decisões aparecem no Percurso",
+    voiceOn: "VOZ ON",
+    voiceOff: "VOZ OFF",
+    quickReplyLabel: "Resposta rápida",
+    cardBlockPrompt: "Confirma o card para eu seguir.",
+    dateInputLabel: "Nova data",
   },
   "en-US": {
     channel: "Oracle channel",
@@ -211,7 +246,13 @@ const chatCopy: Record<
     mealInputPlaceholder: "E.g. don't have this, how much substitute, swap food…",
     contextClear: "Clear context",
     opening: (name) => `Finally${name ? `, ${name}` : ""}. I was waiting for you. In the meantime, I already organized our plan from here. I'm with you — ready to start?`,
-    weeklyOpening: (name) => `${name ? `${name}, ` : ""}before we go on autopilot: how is your week looking? Tell me if there is travel, a tight schedule, pain, or anything that can affect training.`,
+    conversationActive: "Active conversation",
+    visualMemoryHint: "Decisions appear in Journey",
+    voiceOn: "VOICE ON",
+    voiceOff: "VOICE OFF",
+    quickReplyLabel: "Quick reply",
+    cardBlockPrompt: "Confirm the card so I can continue.",
+    dateInputLabel: "New date",
   },
   "it-IT": {
     channel: "Canale dell'oracolo",
@@ -236,7 +277,13 @@ const chatCopy: Record<
     mealInputPlaceholder: "Es.: non ce l'ho, quanto sostituto, cambiare alimento…",
     contextClear: "Esci dal contesto",
     opening: (name) => `Finalmente${name ? `, ${name}` : ""}. Ti stavo aspettando. Nel frattempo ho già organizzato il nostro piano da qui in avanti. Sono con te — iniziamo?`,
-    weeklyOpening: (name) => `${name ? `${name}, ` : ""}prima di andare in automatico: com'è la tua settimana? Dimmi se hai viaggio, orari stretti, dolore o impegni che possono cambiare l'allenamento.`,
+    conversationActive: "Conversazione attiva",
+    visualMemoryHint: "Le decisioni appaiono nel Percorso",
+    voiceOn: "VOCE ON",
+    voiceOff: "VOCE OFF",
+    quickReplyLabel: "Risposta rapida",
+    cardBlockPrompt: "Conferma la card per continuare.",
+    dateInputLabel: "Nuova data",
   },
 }
 
@@ -249,12 +296,11 @@ const FIRST_MESSAGE_SENT_KEY_PREFIX = "guto-first-message-sent"
 const CHAT_STATE_KEY_PREFIX = "guto-chat-state"
 const INITIAL_XP_REWARD_SEEN_KEY_PREFIX = "guto-initial-xp-reward-seen"
 const PROACTIVITY_EXTRACTION_KEY_PREFIX = "guto-proactivity-extracted"
-const PROACTIVITY_WEEKLY_OPENED_KEY_PREFIX = "guto-proactivity-weekly-opened"
 const ARRIVAL_BRIEFING_DELIVERED_KEY_PREFIX = "guto-arrival-delivered"
 const PROACTIVITY_ACTION_KEY_PREFIX = "guto-proactivity-action"
 const GUTO_OPERATIONAL_TIME_ZONE = process.env.NEXT_PUBLIC_GUTO_TIME_ZONE || "Europe/Rome"
 // Minimum number of messages in chat (user + GUTO) before triggering extraction
-const PROACTIVITY_MIN_MESSAGES_FOR_EXTRACTION = 6
+const PROACTIVITY_MIN_MESSAGES_FOR_EXTRACTION = 2
 const PROACTIVITY_SUPPRESS_AFTER_WORKOUT_MS = 10 * 60 * 1000
 
 function getGutoDateKey(date = new Date()): string {
@@ -293,24 +339,6 @@ function markExtractedThisWeek(userId: string): void {
   try {
     const weekKey = getISOWeekKey()
     window.localStorage.setItem(`${PROACTIVITY_EXTRACTION_KEY_PREFIX}:${userId}:${weekKey}`, "1")
-  } catch {}
-}
-
-function hasOpenedWeeklyThisWeek(userId: string): boolean {
-  if (typeof window === "undefined") return false
-  try {
-    const weekKey = getISOWeekKey()
-    return window.localStorage.getItem(`${PROACTIVITY_WEEKLY_OPENED_KEY_PREFIX}:${userId}:${weekKey}`) === "1"
-  } catch {
-    return false
-  }
-}
-
-function markOpenedWeeklyThisWeek(userId: string): void {
-  if (typeof window === "undefined") return
-  try {
-    const weekKey = getISOWeekKey()
-    window.localStorage.setItem(`${PROACTIVITY_WEEKLY_OPENED_KEY_PREFIX}:${userId}:${weekKey}`, "1")
   } catch {}
 }
 
@@ -462,11 +490,12 @@ function readStoredChatState(userId: string): StoredChatState | null {
       messages?: Array<Omit<Message, "timestamp"> & { timestamp?: string }>
       expectedResponse?: GutoExpectedResponse | null
       expectedResponseMessageId?: string | null
+      pendingTurn?: PendingChatTurn | null
     }
     const messages = Array.isArray(parsed.messages)
       ? parsed.messages
           .filter((message) => typeof message.text === "string" && typeof message.id === "string")
-          .slice(-24)
+          .slice(-80)
           .map((message) => ({
             ...message,
             timestamp: message.timestamp ? new Date(message.timestamp) : new Date(),
@@ -474,13 +503,15 @@ function readStoredChatState(userId: string): StoredChatState | null {
       : []
 
     if (!messages.length) return null
-    if (!messages.some((message) => !message.isGuto)) return null
     return {
       messages: removeConsecutiveDuplicateGutoMessages(
         messages.filter((message) => !isStaleAudioFailureMessage(message))
       ),
       expectedResponse: parsed.expectedResponse || null,
       expectedResponseMessageId: parsed.expectedResponseMessageId || null,
+      pendingTurn: parsed.pendingTurn && typeof parsed.pendingTurn.turnId === "string"
+        ? parsed.pendingTurn
+        : null,
     }
   } catch {
     return null
@@ -494,74 +525,42 @@ function writeStoredChatState(userId: string, state: StoredChatState) {
     window.localStorage.setItem(
       getChatStateKey(userId),
       JSON.stringify({
-        messages: state.messages.slice(-24).map((message) => ({
+        messages: state.messages.slice(-80).map((message) => ({
           ...message,
           timestamp: message.timestamp.toISOString(),
         })),
         expectedResponse: state.expectedResponse,
         expectedResponseMessageId: state.expectedResponseMessageId,
+        pendingTurn: state.pendingTurn || null,
       })
     )
   } catch {}
 }
 
-function buildExerciseModelContext(
-  exercise: MissionExercise,
-  memory: GutoMemory | null | undefined,
-  language: SupportedLanguage,
-  workoutPlan?: GutoWorkoutPlan | null,
-): string {
-  const location = memory?.trainingLocation || memory?.preferredTrainingLocation || ""
-  const pathology = memory?.trainingPathology?.trim() || "none"
-  const planLine = workoutPlan
-    ? `Today's workout: "${workoutPlan.title || workoutPlan.focus}" (${workoutPlan.dateLabel}). Focus: ${workoutPlan.focus}. Session location: ${workoutPlan.locationMode || workoutPlan.location || location}. All exercises today: ${workoutPlan.exercises.map((item) => item.name).join(", ")}.`
-    : ""
-
-  return [
-    `[WORKOUT EXERCISE CONTEXT — language: ${language}]`,
-    `User opened chat from the "?" button on this exercise in today's mission.`,
-    `Exercise: "${exercise.name}" (canonical PT: ${exercise.canonicalNamePt || exercise.name}). Muscle group: ${exercise.muscleGroup}.`,
-    `Prescription: ${exercise.sets} sets × ${exercise.reps} reps, rest ${exercise.rest}.`,
-    `Execution cue: ${exercise.cue}. Coach note: ${exercise.note || "none"}.`,
-    planLine,
-    `User profile — training location: ${location || "from calibration"}. Goal: ${memory?.trainingGoal || "unknown"}. Level: ${memory?.trainingLevel || "unknown"}.`,
-    `Sex: ${memory?.biologicalSex || "?"}, age: ${memory?.userAge ?? "?"}, weight: ${memory?.weightKg ?? "?"}kg, height: ${memory?.heightCm ?? "?"}cm.`,
-    `Limitations/pathology: ${pathology}.`,
-    `Reply in ${language}. If user reports busy equipment, pain, or wants a swap, suggest an equivalent for THIS muscle/group and their location. Be direct, max 2–3 short sentences.`,
-  ]
-    .filter(Boolean)
-    .join(" ")
+function createGutoTurnId(userId: string): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID()
+  return `${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-function buildDietModelContext(
-  food: DietFood,
-  meal: DietMeal,
-  memory: GutoMemory | null | undefined,
-  language: SupportedLanguage,
-): string {
-  const goalLabel = memory?.trainingGoal ?? "unknown"
-  const countryLabel = memory?.country ?? ""
-  const mealFoodsList = meal.foods.map((item) => `${item.name} (${item.quantity})`).join(", ")
-  const profileStr = [
-    memory?.biologicalSex,
-    memory?.userAge ? `${memory.userAge}y` : "",
-    memory?.heightCm ? `${memory.heightCm}cm` : "",
-    memory?.weightKg ? `${memory.weightKg}kg` : "",
-    countryLabel,
-  ]
-    .filter(Boolean)
-    .join(", ")
-
-  return [
-    `[DIET CONTEXT — language: ${language} — nutrition only]`,
-    `User opened chat from the food "?" button on their weekly diet plan.`,
-    `Food in question: "${food.name}" (${food.quantity}, ${food.kcal ?? "?"} kcal).`,
-    `Meal: "${meal.name}" (${meal.time}). Full meal: ${mealFoodsList}.`,
-    `Goal: ${goalLabel}. Profile: ${profileStr || "unknown"}.`,
-    `Food restrictions (what they avoid eating, incl. intolerances/allergies): ${memory?.foodRestrictions?.trim() || "none"}.`,
-    `Limitations/pathology: ${memory?.trainingPathology?.trim() || "none"}.`,
-    `Reply in ${language} with substitution, portion guidance, or macro impact for THIS food in THIS meal. Direct, max 2–3 short sentences.`,
-  ].join(" ")
+function createActiveContext(
+  userId: string,
+  type: "workout" | "diet",
+  item: ActiveContextItem,
+): ActiveContext {
+  const now = new Date().toISOString()
+  return {
+    id: `ctx-${createGutoTurnId(userId)}`,
+    version: 1,
+    type,
+    sourceSurface: type === "workout" ? "mission" : "diet",
+    originalItem: item,
+    currentItem: item,
+    lastSuggestedItem: null,
+    rejectedItems: [],
+    acceptedItem: null,
+    createdAt: now,
+    updatedAt: now,
+  }
 }
 
 export function ChatTab({
@@ -613,12 +612,14 @@ export function ChatTab({
         messages: [],
         expectedResponse: null,
         expectedResponseMessageId: null,
+        pendingTurn: null,
       }
     }
     return {
       messages: [localOpeningMessage],
       expectedResponse: null,
       expectedResponseMessageId: null,
+      pendingTurn: null,
     }
   }, [
     calibrationComplete,
@@ -630,34 +631,48 @@ export function ChatTab({
 
   const [messages, setMessages] = useState<Message[]>(initialChatState.messages)
   const [input, setInput] = useState("")
-  const [isSending, setIsSending] = useState(false)
+  const [pendingTurn, setPendingTurn] = useState<PendingChatTurn | null>(initialChatState.pendingTurn || null)
+  const [isSending, setIsSending] = useState(Boolean(initialChatState.pendingTurn))
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [showInitialXpCard, setShowInitialXpCard] = useState(false)
-  const [contextChip, setContextChip] = useState<{ type: "exercise" | "meal"; label: string } | null>(null)
+  const [contextChip, setContextChip] = useState<{ type: "exercise" | "meal"; label: string } | null>(() =>
+    memory?.activeContext
+      ? {
+          type: memory.activeContext.type === "workout" ? "exercise" : "meal",
+          label: memory.activeContext.currentItem.name,
+        }
+      : null
+  )
   const [proactiveMemories, setProactiveMemories] = useState<ProactiveMemory[]>([])
+  const [editingTripMemoryId, setEditingTripMemoryId] = useState<string | null>(null)
+  const [tripDateDraft, setTripDateDraft] = useState("")
+  const [expectedResponse, setExpectedResponse] = useState<GutoExpectedResponse | null>(initialChatState.expectedResponse)
+  const [expectedResponseMessageId, setExpectedResponseMessageId] = useState<string | null>(
+    initialChatState.expectedResponseMessageId
+  )
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const voiceQueueRef = useRef<GutoVoiceQueue | null>(null)
   const messagesRef = useRef<Message[]>(messages)
+  const pendingTurnRef = useRef<PendingChatTurn | null>(pendingTurn)
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null)
   const speechTranscriptRef = useRef("")
   const speechResultHandledRef = useRef(false)
   const handledExerciseQuestionRef = useRef<string | null>(null)
-  const activeExerciseContextRef = useRef<string | null>(null)
-  const activeDietContextRef = useRef<string | null>(null)
+  const activeContextRef = useRef<ActiveContext | null>(memory?.activeContext || null)
+  const activeContextWriteRef = useRef<Promise<unknown>>(Promise.resolve())
+  const activeContextActivationRef = useRef(0)
   const handledFoodQuestionRef = useRef<string | null>(null)
   const processedProactiveActionKeysRef = useRef<Set<string>>(new Set())
-  const weeklyOpeningInFlightRef = useRef(false)
   const proactiveInFlightRef = useRef(false)
   const sendInFlightRef = useRef(false)
+  const blockingProactiveCardRef = useRef(false)
   const lastProactiveKeyRef = useRef<string | null>(null)
   const arrivalBriefingRequestedRef = useRef(false)
-  const weeklyDeferredThisSessionRef = useRef(false)
   const suppressProactivityUntilRef = useRef(0)
-  const dietGenerationAfterWorkoutRef = useRef(false)
   const shouldForceArrivalBriefingRef = useRef((() => {
     if (!storedChatState || storedChatState.messages.length === 0) return false
     const lastMsg = storedChatState.messages[storedChatState.messages.length - 1]
@@ -668,6 +683,13 @@ export function ChatTab({
   const pendingExpectedResponseRef = useRef<GutoExpectedResponse | null>(initialChatState.expectedResponse)
   const pendingExpectedResponseMessageIdRef = useRef<string | null>(initialChatState.expectedResponseMessageId)
   const previousMessagesLengthRef = useRef(messages.length)
+
+  const syncExpectedResponse = useCallback((next: GutoExpectedResponse | null, messageId: string | null) => {
+    pendingExpectedResponseRef.current = next
+    pendingExpectedResponseMessageIdRef.current = messageId
+    setExpectedResponse(next)
+    setExpectedResponseMessageId(messageId)
+  }, [])
 
   const getVoiceQueue = useCallback(() => {
     if (!voiceQueueRef.current) {
@@ -697,12 +719,14 @@ export function ChatTab({
 
   useEffect(() => {
     messagesRef.current = messages
+    pendingTurnRef.current = pendingTurn
     writeStoredChatState(userId, {
       messages,
       expectedResponse: pendingExpectedResponseRef.current,
       expectedResponseMessageId: pendingExpectedResponseMessageIdRef.current,
+      pendingTurn,
     })
-  }, [messages, userId])
+  }, [expectedResponse, expectedResponseMessageId, messages, pendingTurn, userId])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -721,19 +745,27 @@ export function ChatTab({
 
   const refreshProactiveMemories = useCallback(async () => {
     const memories = await getProactiveMemories()
-    // Bloco 2 / decisão do fundador: a confirmação de um evento novo (viagem etc.)
-    // é resolvida UMA vez, conversando no chat — o GUTO pergunta com as palavras
-    // dele. O card nunca pergunta a mesma coisa: ele só carrega validação da
-    // semana passada e descarte. (ver docs/GUTO_CONTEXT_AUDIT.md §7, Bloco 2.)
-    const cardMemories = memories.filter((item) => item.status !== "pending_confirmation")
-    setProactiveMemories(cardMemories)
-    return cardMemories
+    setProactiveMemories(memories)
+    return memories
   }, [])
+
+  const applyProactiveMemoriesFromPatch = useCallback((patch?: Partial<GutoMemory> | null) => {
+    if (!Array.isArray(patch?.proactiveMemories)) return false
+    setProactiveMemories(patch.proactiveMemories)
+    return true
+  }, [])
+
+  useEffect(() => {
+    if (Array.isArray(memory?.proactiveMemories)) {
+      setProactiveMemories(memory.proactiveMemories)
+    }
+  }, [memory?.proactiveMemories])
 
   const applyProactiveActionResult = useCallback(
     (result?: GutoProactivityActionResult | null) => {
       const memoryPatch = getProactivityActionMemoryPatch(result)
       if (memoryPatch) {
+        applyProactiveMemoriesFromPatch(memoryPatch)
         onMemoryPatch?.(memoryPatch)
       }
 
@@ -749,19 +781,23 @@ export function ChatTab({
         })),
       )
     },
-    [onMemoryPatch]
+    [applyProactiveMemoriesFromPatch, onMemoryPatch]
   )
 
   // Botões Sim/Não do card de proatividade: resolve de forma determinística
   // (não depende do GUTO interpretar o chat). Remove o card na hora (otimista),
   // chama a API e reconcilia com o backend.
   const resolveProactiveConfirmation = useCallback(
-    async (memoryId: string, decision: "confirm" | "discard") => {
+    async (memory: ProactiveMemory, decision: "confirm" | "discard") => {
       gutoAudio.playGutoFeedback("tap")
+      const memoryId = memory.id
       setProactiveMemories((prev) => prev.filter((item) => item.id !== memoryId))
       try {
+        const trainingAdapted = memory.type === "trip"
+          ? memory.proposedTrainingAdapted ?? memory.trainingAdapted
+          : undefined
         const result = decision === "confirm"
-          ? await confirmProactiveMemory(memoryId)
+          ? await confirmProactiveMemory(memoryId, trainingAdapted)
           : await discardProactiveMemory(memoryId)
         applyProactiveActionResult(result)
       } catch {
@@ -772,10 +808,54 @@ export function ChatTab({
     [applyProactiveActionResult, refreshProactiveMemories]
   )
 
+  // Card de cancelamento: "Manter viagem" desfaz o pedido de cancelamento e
+  // mantém a viagem ativa (cancel_discard_request). Determinístico, libera o chat.
+  const keepProactiveTrip = useCallback(
+    async (memory: ProactiveMemory) => {
+      gutoAudio.playGutoFeedback("tap")
+      const memoryId = memory.id
+      setProactiveMemories((prev) =>
+        prev.map((item) => (item.id === memoryId ? { ...item, discardRequestedAt: undefined } : item))
+      )
+      try {
+        const result = await cancelDiscardRequest(memoryId)
+        applyProactiveActionResult(result)
+      } catch {
+        // refresh abaixo reconcilia estado real
+      }
+      await refreshProactiveMemories()
+    },
+    [applyProactiveActionResult, refreshProactiveMemories]
+  )
+
+  const startTripDateEdit = useCallback((memory: ProactiveMemory) => {
+    gutoAudio.playGutoFeedback("tap")
+    setEditingTripMemoryId(memory.id)
+    setTripDateDraft(memory.dateParsed || "")
+  }, [])
+
+  const saveTripDateEdit = useCallback(
+    async (memory: ProactiveMemory) => {
+      if (!tripDateDraft.trim()) return
+      gutoAudio.playGutoFeedback("tap")
+      const date = tripDateDraft.trim()
+      try {
+        const result = await updateProactiveMemory(memory.id, { dateParsed: date, dateText: date })
+        applyProactiveActionResult(result)
+      } catch {
+        // refresh abaixo reconcilia estado real
+      }
+      setEditingTripMemoryId(null)
+      setTripDateDraft("")
+      await refreshProactiveMemories()
+    },
+    [applyProactiveActionResult, refreshProactiveMemories, tripDateDraft]
+  )
+
   const triggerProactivityExtraction = useCallback(
-    (safeLanguage: SupportedLanguage) => {
+    (safeLanguage: SupportedLanguage, extraMessages: Message[] = []) => {
       if (hasExtractedThisWeek(userId)) return
-      const currentMessages = messagesRef.current
+      const currentMessages = [...messagesRef.current, ...extraMessages]
       if (currentMessages.length < PROACTIVITY_MIN_MESSAGES_FOR_EXTRACTION) return
 
       const conversationText = currentMessages
@@ -839,6 +919,17 @@ export function ChatTab({
   }, [showInitialXpCard])
 
   useEffect(() => {
+    const incomingContext = memory?.activeContext
+    if (!incomingContext || !shouldHydrateActiveContext(activeContextRef.current, incomingContext)) return
+
+    activeContextRef.current = incomingContext
+    setContextChip({
+      type: incomingContext.type === "workout" ? "exercise" : "meal",
+      label: incomingContext.currentItem.name,
+    })
+  }, [memory?.activeContext])
+
+  useEffect(() => {
     if (!initialXpGranted) return
     if (initialXpRewardSeen || readInitialXpRewardSeen(userId)) return
     setShowInitialXpCard(true)
@@ -846,7 +937,7 @@ export function ChatTab({
       gutoAudio.playGutoFeedback("success")
     }, 400)
     // Auto-dismiss em 6s — card de premiação não deve ficar travando o chat.
-    // O dismiss aciona o ciclo arrival/weeklyOpening em seguida.
+    // O dismiss aciona a chegada contextual do backend em seguida.
     const autoDismissTimer = window.setTimeout(() => {
       if (showInitialXpCardRef.current) {
         dismissInitialXpCardRef.current?.()
@@ -859,19 +950,49 @@ export function ChatTab({
   }, [initialXpGranted, initialXpRewardSeen, userId])
 
   const clearActiveContext = useCallback(() => {
-    const hadExercise = activeExerciseContextRef.current !== null
-    activeExerciseContextRef.current = null
-    activeDietContextRef.current = null
+    activeContextActivationRef.current += 1
+    activeContextRef.current = null
     setContextChip(null)
-    if (hadExercise) void clearActiveExercise()
+    activeContextWriteRef.current = activeContextWriteRef.current
+      .catch(() => {})
+      .then(() => setActiveContext(null))
   }, [])
 
+  const activateContext = useCallback((context: ActiveContext) => {
+    const previousContext = activeContextRef.current
+    const activationId = activeContextActivationRef.current + 1
+    activeContextActivationRef.current = activationId
+    activeContextRef.current = context
+    activeContextWriteRef.current = activeContextWriteRef.current
+      .catch(() => {})
+      .then(async () => {
+        try {
+          const persisted = await setActiveContext(context)
+          if (persisted && activeContextActivationRef.current === activationId) {
+            activeContextRef.current = persisted
+            setContextChip({
+              type: persisted.type === "workout" ? "exercise" : "meal",
+              label: persisted.currentItem.name,
+            })
+            onMemoryPatch?.({ activeContext: persisted })
+          }
+        } catch (error) {
+          if (activeContextActivationRef.current === activationId) {
+            activeContextRef.current = previousContext
+            setContextChip(previousContext
+              ? {
+                  type: previousContext.type === "workout" ? "exercise" : "meal",
+                  label: previousContext.currentItem.name,
+                }
+              : null)
+          }
+          throw error
+        }
+      })
+  }, [onMemoryPatch])
+
   const wrapWithActiveContext = useCallback((text: string) => {
-    const exerciseCtx = activeExerciseContextRef.current
-    if (exerciseCtx) return `${exerciseCtx} User message: ${text}`
-    const dietCtx = activeDietContextRef.current
-    if (dietCtx) return `${dietCtx} User question: ${text}`
-    return text
+    return buildGutoModelInputWithActiveContext(text, activeContextRef.current)
   }, [])
 
   useEffect(() => {
@@ -951,14 +1072,12 @@ export function ChatTab({
       const fala = data.fala?.trim()
       if (!data.due || !fala) {
         if (forceArrivalBriefing) {
-          pendingExpectedResponseRef.current = null
-          pendingExpectedResponseMessageIdRef.current = null
-          markDeliveredArrivalBriefing(userId)
+          syncExpectedResponse(null, null)
         }
         return
       }
 
-      const proactiveKey = `${data.slot || "slot"}-${fala}`
+      const proactiveKey = `${data.slot || "slot"}-${data.deliveryCommitted === false ? "pending" : "committed"}-${fala}`
       if (lastProactiveKeyRef.current === proactiveKey) return
       lastProactiveKeyRef.current = proactiveKey
 
@@ -971,8 +1090,7 @@ export function ChatTab({
         avatarEmotion: normalizeAvatarEmotion(data.avatarEmotion),
       }
 
-      pendingExpectedResponseRef.current = data.expectedResponse || null
-      pendingExpectedResponseMessageIdRef.current = data.expectedResponse ? messageId : null
+      syncExpectedResponse(data.expectedResponse || null, data.expectedResponse ? messageId : null)
 
       setMessages((prev) => {
         if (forceArrivalBriefing && prev.length === 0) {
@@ -982,14 +1100,21 @@ export function ChatTab({
         return appendMessagesWithoutDuplicateGuto(prev, [gutoMessage])
       })
 
-      // Propagate workout plan to mission tab
-      if (data.acao === "updateWorkout" && data.workoutPlan) {
-        onWorkoutPlanUpdated?.(data.workoutPlan)
-      }
-
-      if (data.slot === "arrival" || forceArrivalBriefing) {
-        markDeliveredArrivalBriefing(userId)
-        weeklyDeferredThisSessionRef.current = true
+      // A fala de recuperação pode ser exibida, mas nenhum artefato derivado é
+      // aplicado antes de o backend confirmar a persistência da missão e da
+      // memória. A dieta já pertence à transação pós-pacto do backend.
+      if (data.deliveryCommitted !== false) {
+        const nextWorkoutPlan = data.workoutPlan || data.memoryPatch?.lastWorkoutPlan || null
+        if (nextWorkoutPlan) {
+          onWorkoutPlanUpdated?.(nextWorkoutPlan)
+        }
+        if (data.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
+          applyProactiveMemoriesFromPatch(data.memoryPatch)
+          onMemoryPatch?.(data.memoryPatch)
+        }
+        if (data.slot === "arrival" || forceArrivalBriefing) {
+          markDeliveredArrivalBriefing(userId)
+        }
       }
 
       if (!isMuted) {
@@ -999,55 +1124,19 @@ export function ChatTab({
       console.warn(`Proatividade do GUTO indisponível: ${getApiErrorMessage(error)}`)
     } finally {
       proactiveInFlightRef.current = false
-      if (forceArrivalBriefing) setIsSending(false)
-    }
-  }, [isMuted, language, onWorkoutPlanUpdated, synthesizeAndPlay, userId])
-
-  const deliverWeeklyOpeningIfNeeded = useCallback(async () => {
-    if (weeklyDeferredThisSessionRef.current) return
-    if (!hasDeliveredArrivalBriefing(userId) && !memory?.hasSeenChatOpening) return
-    if (weeklyOpeningInFlightRef.current || hasOpenedWeeklyThisWeek(userId)) return
-    weeklyOpeningInFlightRef.current = true
-
-    const safeLanguage = getLanguage(language) as SupportedLanguage
-    const weekKey = getISOWeekKey()
-    const messageId = `g-weekly-open-${userId}-${weekKey}`
-    const openingText = copy.weeklyOpening(brandName)
-
-    try {
-      await openWeeklyConversation()
-      markOpenedWeeklyThisWeek(userId)
-
-      setMessages((prev) => {
-        if (prev.some((message) => message.id === messageId)) return prev
-        return appendMessagesWithoutDuplicateGuto(prev, [
-          {
-            id: messageId,
-            text: openingText,
-            isGuto: true,
-            timestamp: new Date(),
-            avatarEmotion: "default",
-          },
-        ])
-      })
-
-      if (!isMuted) {
-        await synthesizeAndPlay(openingText, safeLanguage)
+      if (forceArrivalBriefing) {
+        arrivalBriefingRequestedRef.current = false
+        setIsSending(false)
       }
-    } catch (error) {
-      console.warn(`[GUTO][proactivity] weekly opening failed: ${getApiErrorMessage(error)}`)
-    } finally {
-      weeklyOpeningInFlightRef.current = false
     }
-  }, [brandName, copy, isMuted, language, memory?.hasSeenChatOpening, synthesizeAndPlay, userId])
+  }, [applyProactiveMemoriesFromPatch, isMuted, language, onMemoryPatch, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
 
-  // Após o card +100 XP: só arrival (treino pronto). Abertura semanal fica
-  // para outra sessão — nunca no mesmo turno que "já montei o treino".
-  const dismissInitialXpCard = useCallback(() => {
+  // Após o card +100 XP: a chegada passa pelo backend, que decide se precisa
+  // abrir contexto semanal antes de missão.
+  const dismissInitialXpCard = useCallback(async () => {
     setShowInitialXpCard(false)
     writeInitialXpRewardSeen(userId)
-    onXpRewardSeen?.()
-    void checkProactiveMessage(true)
+    await persistXpRewardBeforeArrival(onXpRewardSeen, () => checkProactiveMessage(true))
   }, [checkProactiveMessage, onXpRewardSeen, userId])
 
   useEffect(() => {
@@ -1069,28 +1158,31 @@ export function ChatTab({
       calibrationComplete &&
       !hasDeliveredArrivalBriefing(userId) &&
       !memory?.hasSeenChatOpening
+    const needsWeeklyArrivalProbe =
+      calibrationComplete &&
+      !hasDeliveredArrivalBriefing(userId) &&
+      Boolean(memory?.hasSeenChatOpening) &&
+      !memory?.trainedToday
 
-    if (
-      !shouldForceArrivalBriefing &&
-      !needsContextualArrival &&
-      !needsFirstArrival &&
-      hasDeliveredArrivalBriefing(userId) &&
-      !hasOpenedWeeklyThisWeek(userId)
-    ) {
-      void deliverWeeklyOpeningIfNeeded()
-    } else {
-      void checkProactiveMessage(shouldForceArrivalBriefing || needsFirstArrival || needsContextualArrival)
-    }
+    void checkProactiveMessage(
+      shouldForceArrivalBriefing ||
+      needsFirstArrival ||
+      needsContextualArrival ||
+      needsWeeklyArrivalProbe,
+    )
 
     const timer = window.setInterval(() => {
-      void checkProactiveMessage()
+      const shouldRetryFirstArrival =
+        calibrationComplete &&
+        !hasDeliveredArrivalBriefing(userId) &&
+        !memory?.hasSeenChatOpening
+      void checkProactiveMessage(shouldRetryFirstArrival)
     }, PROACTIVE_CHECK_INTERVAL_MS)
 
     return () => window.clearInterval(timer)
   }, [
     calibrationComplete,
     checkProactiveMessage,
-    deliverWeeklyOpeningIfNeeded,
     initialXpGranted,
     initialXpRewardSeen,
     memory,
@@ -1114,7 +1206,7 @@ export function ChatTab({
   }, [refreshProactiveMemories, showInitialXpCard])
 
   const startRecording = async () => {
-    if (isSending || isRecording) return
+    if (isSending || isRecording || blockingProactiveCardRef.current) return
 
     const SpeechRecognition = getBrowserSpeechRecognition()
     const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "unknown"
@@ -1236,7 +1328,7 @@ export function ChatTab({
   const sendTextToGuto = useCallback(async (
     displayText: string,
     modelInput = displayText,
-    options?: { hideUserBubble?: boolean }
+    options?: { hideUserBubble?: boolean; turnId?: string; resumePending?: boolean }
   ) => {
     if (sendInFlightRef.current) return
     sendInFlightRef.current = true
@@ -1255,9 +1347,66 @@ export function ChatTab({
       timestamp: new Date(),
     }
 
-    if (!options?.hideUserBubble) {
-      setMessages((prev) => [...prev, userMessage])
+    try {
+      await activeContextWriteRef.current
+    } catch {
+      const fallbackMessage: Message = {
+        id: `g-context-err-${Date.now()}`,
+        text: copy.connectionError,
+        isGuto: true,
+        timestamp: new Date(),
+        avatarEmotion: "default",
+      }
+      const failedMessages = options?.hideUserBubble
+        ? [...messagesRef.current, fallbackMessage]
+        : [...messagesRef.current, userMessage, fallbackMessage]
+      messagesRef.current = failedMessages
+      setMessages(failedMessages)
+      setInput("")
+      pendingTurnRef.current = null
+      setPendingTurn(null)
+      writeStoredChatState(userId, {
+        messages: failedMessages,
+        expectedResponse: null,
+        expectedResponseMessageId: null,
+        pendingTurn: null,
+      })
+      sendInFlightRef.current = false
+      setIsSending(false)
+      return
     }
+
+    const turnId = options?.turnId || createGutoTurnId(userId)
+    const activeContextSnapshot = activeContextRef.current
+    const nextPendingTurn: PendingChatTurn = options?.resumePending && pendingTurnRef.current
+      ? pendingTurnRef.current
+      : {
+          turnId,
+          requestId: createGutoTurnId(userId),
+          contextId: activeContextSnapshot?.id || null,
+          contextVersion: activeContextSnapshot?.version || null,
+          activeContextType: activeContextSnapshot?.type || null,
+          activeItemId: activeContextSnapshot?.currentItem.id || null,
+          lastSuggestedItem: buildGutoLastSuggestedItem(activeContextSnapshot),
+          displayText,
+          modelInput,
+          language: safeLanguage,
+          createdAt: new Date().toISOString(),
+        }
+    const nextMessages = options?.hideUserBubble ? messagesRef.current : [...messagesRef.current, userMessage]
+
+    if (!options?.hideUserBubble) {
+      messagesRef.current = nextMessages
+      setMessages(nextMessages)
+    }
+    pendingTurnRef.current = nextPendingTurn
+    setPendingTurn(nextPendingTurn)
+    writeStoredChatState(userId, {
+      messages: nextMessages,
+      expectedResponse: pendingExpectedResponseRef.current,
+      expectedResponseMessageId: pendingExpectedResponseMessageIdRef.current,
+      pendingTurn: nextPendingTurn,
+    })
     setInput("")
     setIsSending(true)
 
@@ -1295,12 +1444,68 @@ export function ChatTab({
           parts: [{ text: message.text }],
         })),
         expectedResponse,
+        turnId: nextPendingTurn.turnId,
+        requestId: nextPendingTurn.requestId,
+        contextId: nextPendingTurn.contextId,
+        contextVersion: nextPendingTurn.contextVersion,
+        activeContextType: nextPendingTurn.activeContextType,
+        activeItemId: nextPendingTurn.activeItemId,
+        lastSuggestedItem: nextPendingTurn.lastSuggestedItem || null,
       })
 
-      const fala = data?.fala?.trim() || copy.emptyResponseFallback
+      const currentContext = activeContextRef.current
+      const renderDecision = resolveGutoResponseForRender(
+        nextPendingTurn,
+        currentContext,
+        data,
+        copy.emptyResponseFallback,
+      )
+      if (renderDecision.kind === "fallback") {
+        stopTypingLoop()
+        if (renderDecision.reason !== "empty_response") {
+          void trackGutoEvent({
+            event: "stale_context_response_discarded",
+            userId,
+            language: safeLanguage,
+            metadata: {
+              turnId: nextPendingTurn.turnId,
+              requestId: nextPendingTurn.requestId,
+              requestedContextId: nextPendingTurn.contextId,
+              currentContextId: currentContext?.id || null,
+              responseContextId: data.contextId ?? null,
+              reason: renderDecision.reason,
+            },
+          }).catch(() => {})
+        }
+        syncExpectedResponse(null, null)
+        const fallbackMessage: Message = {
+          id: `g-fallback-${Date.now()}`,
+          text: renderDecision.speech,
+          isGuto: true,
+          timestamp: new Date(),
+          avatarEmotion: "default",
+        }
+        setMessages((prev) => appendMessagesWithoutDuplicateGuto(prev, [fallbackMessage]))
+        if (!isMuted) {
+          void synthesizeAndPlay(renderDecision.speech, safeLanguage)
+        }
+        pendingTurnRef.current = null
+        setPendingTurn(null)
+        return
+      }
+
+      if (data.activeContext) {
+        activeContextRef.current = data.activeContext
+        setContextChip({
+          type: data.activeContext.type === "workout" ? "exercise" : "meal",
+          label: data.activeContext.currentItem.name,
+        })
+        onMemoryPatch?.({ activeContext: data.activeContext })
+      }
+
+      const fala = renderDecision.speech
       const messageId = `g-${Date.now()}`
-      pendingExpectedResponseRef.current = data?.expectedResponse || null
-      pendingExpectedResponseMessageIdRef.current = data?.expectedResponse ? messageId : null
+      syncExpectedResponse(data?.expectedResponse || null, data?.expectedResponse ? messageId : null)
 
       const gutoMessage: Message = {
         id: messageId,
@@ -1311,9 +1516,11 @@ export function ChatTab({
       }
 
       setMessages((prev) => appendMessagesWithoutDuplicateGuto(prev, [gutoMessage]))
-      if (data.acao === "updateWorkout" && data.workoutPlan) {
-        onWorkoutPlanUpdated?.(data.workoutPlan)
+      const nextWorkoutPlan = data.workoutPlan || data.memoryPatch?.lastWorkoutPlan || null
+      if (nextWorkoutPlan) {
+        onWorkoutPlanUpdated?.(nextWorkoutPlan)
       }
+      const patchHasProactiveMemories = applyProactiveMemoriesFromPatch(data.memoryPatch)
       if (data.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
         onMemoryPatch?.(data.memoryPatch)
       }
@@ -1326,22 +1533,21 @@ export function ChatTab({
       if (data.acao === "requestDeleteAccount") {
         onOpenPrivacySettings?.()
       }
-      void handleProactiveMemoryAction(data.proactiveMemoryAction).then(() => refreshProactiveMemories())
+      if (data.proactiveMemoryAction) {
+        void handleProactiveMemoryAction(data.proactiveMemoryAction)
+      } else if (!patchHasProactiveMemories) {
+        void refreshProactiveMemories()
+      }
       stopTypingLoop()
-      const closedWorkoutFlow = data.acao === "updateWorkout" || Boolean(data.workoutPlan)
-      const dietReadyFromBackend = data.memoryPatch?.dietGenerationStatus === "ready_to_generate"
+      const closedWorkoutFlow = data.acao === "updateWorkout" || Boolean(nextWorkoutPlan)
       if (closedWorkoutFlow) {
         suppressProactivityUntilRef.current = Date.now() + PROACTIVITY_SUPPRESS_AFTER_WORKOUT_MS
-        if (dietReadyFromBackend && !dietGenerationAfterWorkoutRef.current) {
-          dietGenerationAfterWorkoutRef.current = true
-          void generateDietPlan(safeLanguage).catch((error) => {
-            dietGenerationAfterWorkoutRef.current = false
-            console.warn(`Dieta do GUTO não foi gerada após fechar treino: ${getApiErrorMessage(error)}`)
-          })
-        }
       }
 
-      triggerProactivityExtraction(safeLanguage)
+      triggerProactivityExtraction(
+        safeLanguage,
+        options?.hideUserBubble ? [gutoMessage] : [userMessage, gutoMessage],
+      )
 
       // Fala em paralelo (fire-and-forget): NÃO travar o input enquanto o GUTO
       // fala. Antes o `await` mantinha isSending=true durante toda a fala, então
@@ -1350,9 +1556,10 @@ export function ChatTab({
       if (!isMuted) {
         void synthesizeAndPlay(fala, safeLanguage)
       }
+      pendingTurnRef.current = null
+      setPendingTurn(null)
     } catch {
-      pendingExpectedResponseRef.current = null
-      pendingExpectedResponseMessageIdRef.current = null
+      syncExpectedResponse(null, null)
       stopTypingLoop()
       setMessages((prev) => [
         ...prev,
@@ -1364,6 +1571,8 @@ export function ChatTab({
           avatarEmotion: "default",
         },
       ])
+      pendingTurnRef.current = null
+      setPendingTurn(null)
     } finally {
       sendInFlightRef.current = false
       setIsSending(false)
@@ -1375,15 +1584,36 @@ export function ChatTab({
     onChangeLanguage,
     onMemoryPatch,
     onOpenPrivacySettings,
+    applyProactiveMemoriesFromPatch,
     handleProactiveMemoryAction,
     refreshProactiveMemories,
     onWorkoutPlanUpdated,
     synthesizeAndPlay,
     stopTypingLoop,
+    syncExpectedResponse,
     triggerProactivityExtraction,
     userId,
     userName,
   ])
+
+  useEffect(() => {
+    if (!pendingTurn) return
+    if (sendInFlightRef.current) return
+
+    const ageMs = Date.now() - new Date(pendingTurn.createdAt).getTime()
+    if (!Number.isFinite(ageMs) || ageMs > 2 * 60 * 1000) {
+      pendingTurnRef.current = null
+      setPendingTurn(null)
+      setIsSending(false)
+      return
+    }
+
+    void sendTextToGuto(pendingTurn.displayText, pendingTurn.modelInput, {
+      hideUserBubble: true,
+      turnId: pendingTurn.turnId,
+      resumePending: true,
+    })
+  }, [pendingTurn, sendTextToGuto])
 
   useEffect(() => {
     if (!pendingExerciseQuestion) return
@@ -1393,20 +1623,16 @@ export function ChatTab({
     const { exercise } = pendingExerciseQuestion
     const lang = validLang as SupportedLanguage
 
-    activeDietContextRef.current = null
-    activeExerciseContextRef.current = buildExerciseModelContext(exercise, memory, lang, workoutPlan)
-    setContextChip({ type: "exercise", label: exercise.name })
-    // Persiste o exercício na fonte única (GutoMemory) para o cérebro saber dele
-    // entre mensagens — não some no turno seguinte (CORE §6).
-    void setActiveExercise({
-      source: "chat",
+    const position = workoutPlan?.exercises.findIndex((item) => item.id === exercise.id)
+    activateContext(createActiveContext(userId, "workout", {
+      id: exercise.id,
       name: exercise.name,
-      muscleGroup: exercise.muscleGroup,
+      position: typeof position === "number" && position >= 0 ? position : undefined,
+      workoutId: workoutPlan?.scheduledFor,
+      sets: exercise.sets,
       reps: String(exercise.reps),
       rest: exercise.rest,
-      totalSets: exercise.sets,
-      note: exercise.note || undefined,
-    })
+    }))
 
     const hintText = copy.exerciseContextHint(exercise.name)
     const hintId = `g-exercise-ctx-${pendingExerciseQuestion.id}`
@@ -1435,6 +1661,8 @@ export function ChatTab({
     onExerciseQuestionHandled,
     pendingExerciseQuestion,
     synthesizeAndPlay,
+    activateContext,
+    userId,
     validLang,
     workoutPlan,
   ])
@@ -1447,9 +1675,16 @@ export function ChatTab({
     handledFoodQuestionRef.current = key
 
     const lang = validLang as SupportedLanguage
-    activeExerciseContextRef.current = null
-    activeDietContextRef.current = buildDietModelContext(food, meal, memory, lang)
-    setContextChip({ type: "meal", label: food.name })
+    const position = meal.foods.findIndex((item) => item.name === food.name)
+    activateContext(createActiveContext(userId, "diet", {
+      id: `${meal.id}:${food.name.normalize("NFKC").trim().toLocaleLowerCase(lang)}`,
+      name: food.name,
+      position: position >= 0 ? position : undefined,
+      mealId: meal.id,
+      mealName: meal.name,
+      quantity: food.quantity,
+      nutritionalRole: food.notes,
+    }))
 
     const hintText = copy.mealContextHint(food.name)
     const hintId = `g-meal-ctx-${meal.id}-${food.name}`
@@ -1478,23 +1713,71 @@ export function ChatTab({
     onFoodQuestionHandled,
     pendingFoodQuestion,
     synthesizeAndPlay,
+    activateContext,
+    userId,
     validLang,
   ])
 
   const handleSend = async () => {
+    if (blockingProactiveCardRef.current) return
     if (!input.trim() || isSending) return
     const text = input.trim()
     await sendTextToGuto(text, wrapWithActiveContext(text))
   }
 
-  const visibleMessages = messages.slice(-8)
+  const resolveQuickReplyModelInput = useCallback(
+    (option: string, response: GutoExpectedResponse | null) => {
+      if (response?.context !== "travel_training") return option
+      const normalized = option
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim()
+        .toLocaleLowerCase(validLang)
+      const isYes = normalized === "sim" || normalized === "yes" || normalized === "si"
+      const positive: Record<SupportedLanguage, string> = {
+        "pt-BR": "consigo treinar na viagem",
+        "en-US": "I can train during the trip",
+        "it-IT": "riesco ad allenarmi in viaggio",
+      }
+      const negative: Record<SupportedLanguage, string> = {
+        "pt-BR": "não vou conseguir treinar na viagem",
+        "en-US": "I cannot train during the trip",
+        "it-IT": "non riesco ad allenarmi in viaggio",
+      }
+      return isYes ? positive[validLang as SupportedLanguage] : negative[validLang as SupportedLanguage]
+    },
+    [validLang]
+  )
+
+  const handleQuickReply = useCallback(
+    async (option: string, response: GutoExpectedResponse) => {
+      if (isSending || blockingProactiveCardRef.current) return
+      const displayText = option.trim()
+      const modelText = resolveQuickReplyModelInput(displayText, response)
+      await sendTextToGuto(displayText, wrapWithActiveContext(modelText))
+    },
+    [isSending, resolveQuickReplyModelInput, sendTextToGuto, wrapWithActiveContext]
+  )
+
+  const visibleMessages = messages
+  const latestGutoMessage = [...messages].reverse().find((message) => message.isGuto)
+  const activeExpectedResponse =
+    expectedResponse && expectedResponseMessageId && latestGutoMessage?.id === expectedResponseMessageId
+      ? expectedResponse
+      : null
+  const quickReplyOptions = activeExpectedResponse?.options?.filter((option) => option.trim()) ?? []
   const proactiveUi = useMemo(() => getProactiveMemoryUiCopy(validLang), [validLang])
   const actionableProactive = useMemo(
-    () => getActionableProactiveMemories(proactiveMemories),
-    [proactiveMemories]
+    () => getActionableProactiveMemories(proactiveMemories, memory?.activeConversationContext || null),
+    [memory?.activeConversationContext, proactiveMemories]
   )
   const showProactiveBanner =
-    !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories)
+    !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories, memory?.activeConversationContext || null)
+  const hasBlockingProactiveCard = showProactiveBanner &&
+    (actionableProactive.pendingConfirmation.length > 0 || actionableProactive.awaitingDiscard.length > 0)
+  useEffect(() => {
+    blockingProactiveCardRef.current = hasBlockingProactiveCard
+  }, [hasBlockingProactiveCard])
   const inputPlaceholder =
     contextChip?.type === "exercise"
       ? copy.exerciseInputPlaceholder
@@ -1632,37 +1915,65 @@ export function ChatTab({
         )}
       </AnimatePresence>
 
-      {/* Avatar — ancorado na base. Opacidade reduz conforme dias de ausência (Tamagotchi). */}
-      <div className="guto-chat-avatar-stage absolute z-10 flex flex-col items-center justify-end pb-[clamp(16px,4vh,32px)]">
-        <div
-          className="relative flex w-[clamp(320px,96vw,440px)] flex-col items-center justify-end transition-opacity duration-1000"
-          style={{ opacity: vitalState?.opacity ?? 1 }}
-        >
-          <GutoAvatarController
-            stage={evolution}
-            size="xl"
-            showPlatform={false}
-            isActive={isAvatarActive}
-          />
+      {!isKeyboardOpen && (
+        <div className="guto-chat-presence absolute z-30">
+          <div className="flex items-center gap-3 rounded-[22px] border border-[rgba(82,231,255,0.38)] bg-white/80 px-3 py-2 shadow-[0_14px_34px_rgba(82,231,255,0.12)] backdrop-blur-[18px]">
+            <div
+              className="guto-chat-presence-avatar flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full"
+              style={{ opacity: vitalState?.opacity ?? 1 }}
+            >
+              <GutoAvatarController
+                stage={evolution}
+                size="sm"
+                showPlatform={false}
+                isActive={isAvatarActive}
+                interactive={false}
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="font-mono text-[9px] font-black uppercase tracking-[0.2em] text-(--guto-cyan)">
+                {copy.conversationActive}
+              </p>
+              <p
+                className="mt-1 truncate text-[12px] font-black leading-tight text-(--guto-navy)"
+                data-testid="guto-chat-presence-label"
+              >
+                GUTO
+              </p>
+              <p className="mt-0.5 truncate font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-[rgba(13,35,65,0.44)]">
+                {copy.visualMemoryHint}
+              </p>
+            </div>
+            <span
+              className="shrink-0 rounded-full border border-[rgba(82,231,255,0.36)] px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-[0.08em] text-[rgba(13,35,65,0.58)]"
+              aria-hidden="true"
+            >
+              {isMuted ? copy.voiceOff : copy.voiceOn}
+            </span>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Mensagens — z-30 flutua sobre o avatar/cápsula como camada holográfica */}
+      {/* Mensagens — camada principal da aba GUTO: histórico natural, não vitrine do avatar. */}
       <div
         ref={scrollRef}
-        className="guto-chat-list absolute left-0 right-0 top-[54%] z-30 overflow-y-auto px-5 pb-3"
-        style={{ bottom: `calc(var(--guto-chat-input-bottom) + ${dockHeight + 16}px)` }}
+        className="guto-chat-list absolute left-0 right-0 z-30 overflow-y-auto px-5 pb-3 pt-1"
+        style={{
+          top: "calc(var(--guto-chat-header-top) + var(--guto-chat-header-height) + 92px)",
+          bottom: `calc(var(--guto-chat-input-bottom) + ${dockHeight + 16}px)`,
+        }}
       >
-        <motion.div className="flex min-h-full flex-col justify-end gap-3">
+        <motion.div className="flex min-h-full flex-col justify-end gap-2.5">
           {visibleMessages.map((message) => (
             <motion.div
               key={message.id}
+              data-testid={message.isGuto ? "guto-message" : "user-message"}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               className={
                 message.isGuto
-                  ? "mx-auto w-full max-w-[20rem] rounded-[20px] border border-[rgba(82,231,255,0.72)] px-4 py-3 text-center font-mono text-[clamp(11px,2.8vw,13px)] font-black leading-snug text-(--guto-navy)"
-                  : "ml-auto max-w-[70%] rounded-[18px] border border-white/80 bg-white/90 px-4 py-2 text-right text-xs font-semibold leading-snug text-[rgba(13,35,65,0.68)] shadow-[0_12px_26px_rgba(137,151,168,0.1)]"
+                  ? "mr-auto w-fit max-w-[82%] rounded-[20px] border border-[rgba(82,231,255,0.62)] px-4 py-3 text-left font-mono text-[clamp(11px,2.8vw,13px)] font-black leading-snug text-(--guto-navy)"
+                  : "ml-auto w-fit max-w-[78%] rounded-[18px] border border-white/80 bg-white/90 px-4 py-2 text-right text-xs font-semibold leading-snug text-[rgba(13,35,65,0.68)] shadow-[0_12px_26px_rgba(137,151,168,0.1)]"
               }
               style={message.isGuto ? {
                 background: "linear-gradient(180deg, rgba(255,255,255,0.88) 0%, rgba(248,251,255,0.82) 100%)",
@@ -1689,56 +2000,173 @@ export function ChatTab({
         <motion.div
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
-          className="max-h-[42vh] w-full overflow-y-auto rounded-[16px] border border-[rgba(82,231,255,0.4)] bg-white/95 px-3 py-2 shadow-[0_8px_24px_rgba(82,231,255,0.18)]"
+          className="max-h-[42vh] w-full overflow-y-auto rounded-[22px] border border-[rgba(82,231,255,0.56)] bg-white/92 px-4 py-4 shadow-[0_12px_32px_rgba(82,231,255,0.18)] backdrop-blur-[18px]"
         >
-          <p className="mb-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[rgba(13,35,65,0.55)]">
-            {actionableProactive.pendingConfirmation.length > 0
-              ? proactiveUi.hintConfirm
-              : actionableProactive.awaitingDiscard.length > 0
-                ? proactiveUi.hintConfirm
-                : proactiveUi.hintValidate}
-          </p>
           <div className="flex flex-wrap gap-1.5">
             {actionableProactive.pendingConfirmation.map((memory) => (
-              <div key={memory.id} className="flex w-full flex-col gap-1.5">
-                <span className="self-start rounded-full border border-[rgba(255,193,7,0.55)] bg-[rgba(255,243,205,0.9)] px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-[0.06em] text-(--guto-navy)">
-                  {proactiveUi.pendingConfirm(formatProactiveMemoryLabel(memory))}
-                </span>
-                <div className="flex gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => void resolveProactiveConfirmation(memory.id, "confirm")}
-                    className="rounded-full bg-(--guto-cyan) px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-navy)"
-                  >
-                    {proactiveUi.btnYes}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void resolveProactiveConfirmation(memory.id, "discard")}
-                    className="rounded-full border border-[rgba(13,35,65,0.25)] bg-white px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-[rgba(13,35,65,0.7)]"
-                  >
-                    {proactiveUi.btnNo}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      gutoAudio.playGutoFeedback("tap")
-                      inputRef.current?.focus()
-                    }}
-                    className="rounded-full border border-[rgba(82,231,255,0.5)] bg-white px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-cyan)"
-                  >
-                    {proactiveUi.btnFix}
-                  </button>
+              <div key={memory.id} className="flex w-full flex-col">
+                {memory.type === "trip" ? (
+                  <>
+                    <div className="flex items-center gap-2 text-(--guto-cyan)">
+                      <Plane className="h-4 w-4" aria-hidden="true" />
+                      <p className="text-sm font-black tracking-[0.04em] text-(--guto-navy)">{proactiveUi.tripTitle}</p>
+                    </div>
+                    <p className="mt-3 text-[15px] font-black leading-tight text-(--guto-navy)">
+                      {formatProactiveWeekday(memory, validLang as SupportedLanguage)}
+                    </p>
+                    <p className="mt-0.5 font-mono text-[11px] font-bold tracking-[0.08em] text-[rgba(13,35,65,0.56)]">
+                      {formatProactiveDate(memory, validLang as SupportedLanguage)}
+                    </p>
+                    <p className="mt-3 text-[13px] font-bold text-(--guto-navy)">
+                      {proactiveUi.tripQuestion(
+                        formatProactiveDate(memory, validLang as SupportedLanguage),
+                        memory.proposedTrainingAdapted ?? memory.trainingAdapted,
+                      )}
+                    </p>
+                    {editingTripMemoryId === memory.id ? (
+                      <label className="mt-3 flex flex-col gap-1.5 text-left font-mono text-[9px] font-black uppercase tracking-[0.12em] text-[rgba(13,35,65,0.55)]">
+                        {copy.dateInputLabel}
+                        <input
+                          type="date"
+                          value={tripDateDraft}
+                          onChange={(event) => setTripDateDraft(event.target.value)}
+                          className="min-h-11 rounded-[16px] border border-[rgba(82,231,255,0.48)] bg-white/78 px-3 text-center font-mono text-[12px] font-black tracking-[0.08em] text-(--guto-navy) outline-none"
+                        />
+                      </label>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-sm font-black text-(--guto-navy)">
+                    {proactiveUi.pendingConfirm(formatProactiveMemoryLabel(memory))}
+                  </p>
+                )}
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {memory.type === "trip" && editingTripMemoryId === memory.id ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void saveTripDateEdit(memory)}
+                        disabled={!tripDateDraft.trim()}
+                        className="min-h-11 rounded-full border border-(--guto-cyan) bg-[rgba(82,231,255,0.2)] px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.22)] disabled:opacity-40"
+                      >
+                        {proactiveUi.btnSaveDate}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingTripMemoryId(null)
+                          setTripDateDraft("")
+                        }}
+                        className="min-h-11 rounded-full border border-[rgba(13,35,65,0.18)] bg-white/72 px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy)"
+                      >
+                        {proactiveUi.btnKeepDate}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void resolveProactiveConfirmation(memory, "confirm")}
+                        className="min-h-11 rounded-full border border-(--guto-cyan) bg-[rgba(82,231,255,0.2)] px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.22)]"
+                      >
+                        {proactiveUi.btnConfirm}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void resolveProactiveConfirmation(memory, "discard")}
+                        className="min-h-11 rounded-full border border-[rgba(13,35,65,0.18)] bg-white/72 px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy)"
+                      >
+                        {proactiveUi.btnCancel}
+                      </button>
+                      {memory.type === "trip" ? (
+                        <button
+                          type="button"
+                          onClick={() => startTripDateEdit(memory)}
+                          className="col-span-2 min-h-11 rounded-full border border-[rgba(82,231,255,0.48)] bg-white/62 px-3 py-2 font-mono text-[10px] font-black tracking-[0.12em] text-[rgba(13,35,65,0.7)]"
+                        >
+                          {proactiveUi.btnFix}
+                        </button>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </div>
             ))}
             {actionableProactive.awaitingDiscard.map((memory) => (
-              <span
-                key={memory.id}
-                className="rounded-full border border-[rgba(255,120,80,0.45)] bg-[rgba(255,235,228,0.92)] px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-[0.06em] text-(--guto-navy)"
-              >
-                {proactiveUi.pendingConfirm(formatProactiveMemoryLabel(memory))}
-              </span>
+              <div key={memory.id} className="flex w-full flex-col">
+                <div className="flex items-center gap-2 text-[rgba(255,120,80,0.95)]">
+                  <Plane className="h-4 w-4" aria-hidden="true" />
+                  <p className="text-sm font-black tracking-[0.04em] text-(--guto-navy)">{proactiveUi.tripTitle}</p>
+                </div>
+                <p className="mt-3 text-[15px] font-black leading-tight text-(--guto-navy)">
+                  {formatProactiveWeekday(memory, validLang as SupportedLanguage)}
+                </p>
+                <p className="mt-0.5 font-mono text-[11px] font-bold tracking-[0.08em] text-[rgba(13,35,65,0.56)]">
+                  {formatProactiveDate(memory, validLang as SupportedLanguage)}
+                </p>
+                <p className="mt-3 text-[13px] font-bold text-(--guto-navy)">
+                  {proactiveUi.cancelTripQuestion(formatProactiveDate(memory, validLang as SupportedLanguage))}
+                </p>
+                {editingTripMemoryId === memory.id ? (
+                  <label className="mt-3 flex flex-col gap-1.5 text-left font-mono text-[9px] font-black uppercase tracking-[0.12em] text-[rgba(13,35,65,0.55)]">
+                    {copy.dateInputLabel}
+                    <input
+                      type="date"
+                      value={tripDateDraft}
+                      onChange={(event) => setTripDateDraft(event.target.value)}
+                      className="min-h-11 rounded-[16px] border border-[rgba(82,231,255,0.48)] bg-white/78 px-3 text-center font-mono text-[12px] font-black tracking-[0.08em] text-(--guto-navy) outline-none"
+                    />
+                  </label>
+                ) : null}
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {editingTripMemoryId === memory.id ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void saveTripDateEdit(memory)}
+                        disabled={!tripDateDraft.trim()}
+                        className="min-h-11 rounded-full border border-(--guto-cyan) bg-[rgba(82,231,255,0.2)] px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.22)] disabled:opacity-40"
+                      >
+                        {proactiveUi.btnSaveDate}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingTripMemoryId(null)
+                          setTripDateDraft("")
+                        }}
+                        className="min-h-11 rounded-full border border-[rgba(13,35,65,0.18)] bg-white/72 px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy)"
+                      >
+                        {proactiveUi.btnKeepDate}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void resolveProactiveConfirmation(memory, "discard")}
+                        className="min-h-11 rounded-full border border-[rgba(255,120,80,0.85)] bg-[rgba(255,120,80,0.16)] px-3 py-2 font-mono text-[10px] font-black tracking-[0.12em] text-(--guto-navy) shadow-[0_0_14px_rgba(255,120,80,0.18)]"
+                      >
+                        {proactiveUi.btnConfirmCancel}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void keepProactiveTrip(memory)}
+                        className="min-h-11 rounded-full border border-[rgba(13,35,65,0.18)] bg-white/72 px-3 py-2 font-mono text-[10px] font-black tracking-[0.14em] text-(--guto-navy)"
+                      >
+                        {proactiveUi.btnKeepTrip}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startTripDateEdit(memory)}
+                        className="col-span-2 min-h-11 rounded-full border border-[rgba(82,231,255,0.48)] bg-white/62 px-3 py-2 font-mono text-[10px] font-black tracking-[0.12em] text-[rgba(13,35,65,0.7)]"
+                      >
+                        {proactiveUi.btnFix}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
             ))}
             {actionableProactive.pendingValidation.map((memory) => (
               <span
@@ -1752,14 +2180,40 @@ export function ChatTab({
         </motion.div>
       )}
 
+      {quickReplyOptions.length > 0 && activeExpectedResponse && !hasBlockingProactiveCard && (
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex w-full flex-wrap gap-2 rounded-[18px] border border-[rgba(82,231,255,0.38)] bg-white/92 p-2 shadow-[0_8px_24px_rgba(82,231,255,0.14)]"
+        >
+          <span className="sr-only">{copy.quickReplyLabel}</span>
+          {quickReplyOptions.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => void handleQuickReply(option, activeExpectedResponse)}
+              disabled={isSending || hasBlockingProactiveCard}
+              className="min-h-11 flex-1 rounded-full border border-[rgba(82,231,255,0.62)] bg-[rgba(82,231,255,0.16)] px-4 py-2 font-mono text-[11px] font-black uppercase tracking-[0.16em] text-(--guto-navy) shadow-[0_0_14px_rgba(82,231,255,0.18)] disabled:opacity-45"
+            >
+              {option}
+            </button>
+          ))}
+        </motion.div>
+      )}
+
       {contextChip && (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           className="flex w-full items-center justify-between gap-2 rounded-full border border-[rgba(82,231,255,0.45)] bg-white/90 px-3 py-1.5 shadow-[0_8px_24px_rgba(82,231,255,0.12)]"
         >
-          <span className="min-w-0 truncate font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-navy)">
-            {contextChip.type === "exercise" ? "?" : "🍽"} {contextChip.label}
+          <span className="flex min-w-0 items-center gap-1.5 truncate font-mono text-[10px] font-black uppercase tracking-[0.08em] text-(--guto-navy)">
+            {contextChip.type === "exercise" ? (
+              <Dumbbell className="h-3.5 w-3.5 shrink-0 text-(--guto-cyan)" aria-hidden="true" />
+            ) : (
+              <UtensilsCrossed className="h-3.5 w-3.5 shrink-0 text-(--guto-cyan)" aria-hidden="true" />
+            )}
+            <span className="truncate">{contextChip.label}</span>
           </span>
           <button
             type="button"
@@ -1775,6 +2229,14 @@ export function ChatTab({
       )}
 
       <div className="w-full">
+        {hasBlockingProactiveCard ? (
+          <div
+            data-testid="guto-chat-card-block"
+            className="grid min-h-[58px] place-items-center rounded-[18px] border border-[rgba(82,231,255,0.48)] bg-white/86 px-4 py-3 text-center font-mono text-[10px] font-black uppercase tracking-[0.14em] text-(--guto-navy) shadow-[0_8px_24px_rgba(82,231,255,0.14)]"
+          >
+            {copy.cardBlockPrompt}
+          </div>
+        ) : (
         <div className="guto-chat-input h-[58px] rounded-[18px] px-3 py-2">
           <div className="flex h-[42px] items-center gap-3">
             <motion.button
@@ -1785,7 +2247,7 @@ export function ChatTab({
               }}
               onPointerUp={stopRecording}
               onPointerLeave={() => isRecording && stopRecording()}
-              disabled={isSending}
+              disabled={isSending || hasBlockingProactiveCard}
               className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full text-(--guto-cyan)"
               animate={isRecording ? { scale: [1, 1.08, 1] } : { scale: 1 }}
               transition={{ duration: 0.8, repeat: isRecording ? Infinity : 0 }}
@@ -1814,7 +2276,7 @@ export function ChatTab({
                 gutoAudio.playGutoFeedback("tap")
                 void handleSend()
               }}
-              disabled={isSending || !input.trim()}
+              disabled={isSending || hasBlockingProactiveCard || !input.trim()}
               className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full text-(--guto-cyan) disabled:opacity-35"
               whileTap={{ scale: isSending ? 1 : 0.94 }}
               aria-label="Enviar mensagem"
@@ -1823,6 +2285,7 @@ export function ChatTab({
             </motion.button>
           </div>
         </div>
+        )}
 
         {isSpeaking && !isMuted && (
           <div className="mt-1 text-center font-mono text-[9px] uppercase tracking-normal text-(--guto-cyan)">

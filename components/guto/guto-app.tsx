@@ -21,12 +21,14 @@ import { LanguageScreen } from "./screens/language-screen"
 import type { MissionExercise } from "./view-models"
 import { WorkoutValidationFlow } from "./validation/workout-validation-flow"
 import { getApiErrorMessage } from "@/lib/api/client"
-import { acceptGutoConsent, getGutoMemory, saveGutoMemory, trackGutoEvent, validateGutoName, type DietFood, type DietMeal, type GutoMemory, type GutoNameValidation, type GutoTelemetryEvent, type GutoWorkoutPlan } from "@/lib/api/guto"
+import { acceptGutoConsent, generateDietPlan, getGutoMemory, saveGutoMemory, trackGutoEvent, validateGutoName, type DietFood, type DietMeal, type DietPlan, type GutoMemory, type GutoNameValidation, type GutoTelemetryEvent, type GutoWorkoutPlan } from "@/lib/api/guto"
 import { useAuth } from "@/components/auth-provider"
 import { getInvite, claimInvite, logout, deleteOwnAccount, revokeConsent, type InvitePreview } from "@/lib/api/auth"
 import type { EvolutionStage, SupportedLanguage } from "@/types/contract"
 import { resolveGutoEvolutionStage } from "@/lib/guto-evolution"
 import { getGutoVitalState } from "@/lib/guto-vital-state"
+import { commitPactOnceAndRecover, recoverDurablePostPactArtifacts } from "@/lib/guto-pact"
+import { acceptConsentOnceAndRecover } from "@/lib/guto-consent"
 import { isPushSupported, getCurrentSubscription, subscribePush, unsubscribePush } from "@/lib/push-client"
 import { createPortalSession, getBillingStatus, type BillingStatus } from "@/lib/api/billing"
 import { translations } from "./translations"
@@ -45,6 +47,7 @@ import {
 } from "@/lib/guto-profile"
 import { getWorkoutMissingFields, localizeGutoWorkoutPlan } from "@/lib/workout-plan"
 import { resolveWorkoutValidationLocationMode } from "@/lib/workout-location"
+import { commitCalibrationOnceAndRecover, hasDurableSovereignNameConfirmation, resolveDurableCommittedName, stageAfterInviteClaim } from "@/lib/onboarding-flow"
 
 type AppStage = "intro" | "language" | "invite_claim" | "consent" | "naming" | "calibration" | "pact" | "system" | "settings"
 type SettingsMode = "menu" | "language" | "name" | "data" | "profile" | "goal" | "location" | "pathology" | "physicaldata" | "residence" | "food_restrictions" | "privacy"
@@ -81,6 +84,7 @@ interface NameGate {
 }
 
 type GutoMemoryPayload = Parameters<typeof saveGutoMemory>[0]
+type PactFlowState = "idle" | "holding" | "confirming" | "generating_artifacts" | "ready" | "recoverable_error"
 
 const STORAGE_KEY = "guto-white-lab-profile"
 const STORAGE_VERSION = 2  // bump aqui para forçar reset em todos os dispositivos
@@ -569,6 +573,16 @@ function hasMemoryName(memory?: GutoMemory | null) {
   return Boolean(firstRealGutoName(memory?.name))
 }
 
+function sameMemoryPatchValue(current: unknown, incoming: unknown): boolean {
+  if (Object.is(current, incoming)) return true
+  if (!current || !incoming || typeof current !== "object" || typeof incoming !== "object") return false
+  try {
+    return JSON.stringify(current) === JSON.stringify(incoming)
+  } catch {
+    return false
+  }
+}
+
 function normalizeCountryLookup(value: string) {
   return value
     .normalize("NFD")
@@ -656,9 +670,7 @@ function resolveAuthenticatedStage(
   // real. Nome só de admin (preset do convite), sem confirmação nem pacto, NÃO
   // conta — preserva a regra do Nome Soberano.
   const hasRealName = hasStoredName(profile) || hasMemoryName(memory)
-  const namingConfirmed = Boolean(
-    profile?.namingConfirmed || profile?.onboardingComplete || pactDoneBackend
-  )
+  const namingConfirmed = hasDurableSovereignNameConfirmation(profile, memory)
   if (!namingConfirmed || !hasRealName) {
     return "naming"
   }
@@ -674,8 +686,11 @@ function resolveAuthenticatedStage(
     return "calibration"
   }
 
-  // Pacto: flag local OU prova no backend (XP inicial já concedido).
-  if (profile?.onboardingComplete || profile?.pactAccepted || pactDoneBackend) {
+  // Pacto: quando a memória carregou, o backend manda. Flag local só serve como
+  // fallback se a memória não carregou; isso evita entrar no app sem XP/pacto
+  // gravados no servidor.
+  const pactDoneLocal = Boolean(profile?.onboardingComplete || profile?.pactAccepted)
+  if (memory ? pactDoneBackend : pactDoneLocal) {
     return "system"
   }
 
@@ -705,6 +720,7 @@ export function GutoApp({
   const [rotatingLanguage, setRotatingLanguage] = useState(false)
   const [isHoldingPact, setIsHoldingPact] = useState(false)
   const [pactProgress, setPactProgress] = useState(0)
+  const [pactFlowState, setPactFlowState] = useState<PactFlowState>("idle")
   const [whiteout, setWhiteout] = useState(false)
   const [introNeedsActivation, setIntroNeedsActivation] = useState(true)
   const [introPlaybackState, setIntroPlaybackState] = useState<IntroPlaybackState>("idle")
@@ -751,12 +767,14 @@ export function GutoApp({
   const [inviteLoading, setInviteLoading] = useState(false)
 
   const timersRef = useRef<number[]>([])
+  const inviteTransitionTimerRef = useRef<number | null>(null)
   const pactIntervalRef = useRef<number | null>(null)
   const introSafetyTimerRef = useRef<number | null>(null)
   const introFinishedRef = useRef(false)
   const introStartedRef = useRef(false)
   const introStartedAtRef = useRef(0)
   const pactCompleteRef = useRef(false)
+  const pactFinalizedRef = useRef(false)
   const portalVideoRef = useRef<HTMLVideoElement | null>(null)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const memoryRef = useRef<GutoMemory | null>(null)
@@ -779,6 +797,16 @@ export function GutoApp({
     timersRef.current = []
   }, [])
 
+  const scheduleInviteTransition = useCallback((callback: () => void) => {
+    if (inviteTransitionTimerRef.current) {
+      window.clearTimeout(inviteTransitionTimerRef.current)
+    }
+    inviteTransitionTimerRef.current = window.setTimeout(() => {
+      inviteTransitionTimerRef.current = null
+      callback()
+    }, 2000)
+  }, [])
+
   const clearPactInterval = useCallback(() => {
     if (pactIntervalRef.current) {
       window.clearInterval(pactIntervalRef.current)
@@ -790,6 +818,13 @@ export function GutoApp({
     if (introSafetyTimerRef.current) {
       window.clearTimeout(introSafetyTimerRef.current)
       introSafetyTimerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => () => {
+    if (inviteTransitionTimerRef.current) {
+      window.clearTimeout(inviteTransitionTimerRef.current)
+      inviteTransitionTimerRef.current = null
     }
   }, [])
 
@@ -1049,6 +1084,40 @@ export function GutoApp({
 
         if (cancelled) return
 
+        const onboardingIncomplete = !stored?.onboardingComplete && !stored?.pactAccepted
+        const persistedLanguage = readResolvedStoredLanguage({
+          scope: onboardingIncomplete ? "onboarding" : "private",
+          localProfileLanguage: stored?.language,
+          memoryLanguage: loadedMemory?.language,
+          fallbackLanguage: language,
+        })
+        if (process.env.NODE_ENV === "development") {
+          console.info("[GUTO_LANGUAGE] resolved after auth:", persistedLanguage)
+        }
+
+        const localPactDone = Boolean(stored?.onboardingComplete || stored?.pactAccepted)
+        if (
+          localPactDone &&
+          loadedMemory &&
+          hasMemoryConsent(loadedMemory) &&
+          hasCompleteGutoCalibration(loadedMemory) &&
+          !loadedMemory.initialXpGranted
+        ) {
+          const repairPayload: GutoMemoryPayload = {
+            userId: currentUserId,
+            language: persistedLanguage,
+            xpEvent: "grant_initial_xp",
+          }
+          const repairedName = firstRealGutoName(stored?.userName, loadedMemory.name)
+          if (repairedName) repairPayload.name = repairedName
+          try {
+            loadedMemory = await saveGutoMemory(repairPayload)
+            if (cancelled) return
+          } catch (error) {
+            console.warn(`Pacto do GUTO não reconciliado: ${getApiErrorMessage(error)}`)
+          }
+        }
+
         if (loadedMemory) {
           setMemory(loadedMemory)
           setEvolution(resolveEvolutionStage(loadedMemory.totalXp || 0))
@@ -1063,16 +1132,6 @@ export function GutoApp({
           }
         }
 
-        const onboardingIncomplete = !stored?.onboardingComplete && !stored?.pactAccepted
-        const persistedLanguage = readResolvedStoredLanguage({
-          scope: onboardingIncomplete ? "onboarding" : "private",
-          localProfileLanguage: stored?.language,
-          memoryLanguage: loadedMemory?.language,
-          fallbackLanguage: language,
-        })
-        if (process.env.NODE_ENV === "development") {
-          console.info("[GUTO_LANGUAGE] resolved after auth:", persistedLanguage)
-        }
         const resolvedProfile = resolveGutoProfile({
           user,
           stored,
@@ -1096,14 +1155,14 @@ export function GutoApp({
           console.info("[GUTO_LANGUAGE] applied in private app:", persistedLanguage)
         }
 
-        const hasConfirmedName = Boolean(stored?.namingConfirmed || stored?.onboardingComplete)
+        const hasConfirmedName = hasDurableSovereignNameConfirmation(stored, loadedMemory)
         const onboardingDraftName = hasConfirmedName ? resolvedName : onboardingSuggestedName(resolvedName)
 
         // Only set committedName (used in the chat header) if the user has already
         // confirmed their own name. If they're still at the naming screen, only
         // pre-fill draftName so the presetName from the invite does not leak into the UI.
         setDraftName(onboardingDraftName)
-        setCommittedName(hasConfirmedName ? resolvedName : "")
+        setCommittedName(resolveDurableCommittedName(resolvedName, stored, loadedMemory))
 
         persistProfile({
           language: persistedLanguage,
@@ -1180,13 +1239,11 @@ export function GutoApp({
     }
   }, [clearIntroSafetyTimer, stage])
 
-  const startSystem = useCallback(
-    (finalName: string, finalLanguage: SupportedLanguage) => {
-      if (pactCompleteRef.current) return
-      pactCompleteRef.current = true
-      gutoAudio.stopGutoSound("hold_charge")
+  const finalizeReadyPact = useCallback((updated: GutoMemory, finalName: string, finalLanguage: SupportedLanguage) => {
+      if (pactFinalizedRef.current) return
+      pactFinalizedRef.current = true
+      setPactFlowState("ready")
       gutoAudio.playGutoFeedback("hold_complete")
-
       effectRegistry.emit("whiteout")
       persistProfile({
         language: finalLanguage,
@@ -1195,13 +1252,9 @@ export function GutoApp({
         pactAccepted: true,
         onboardingComplete: true,
       })
-      persistMemory({
-        name: finalName,
-        language: finalLanguage,
-        trainedToday: false,
-        xpEvent: "grant_initial_xp",
-      })
       trackBehaviorEvent("pact_completed", { finalLanguage })
+      setMemory(updated)
+      setEvolution(resolveEvolutionStage(updated.totalXp || 0))
       setPactProgress(100)
       setIsHoldingPact(false)
       setWhiteout(true)
@@ -1212,25 +1265,68 @@ export function GutoApp({
         setWhiteout(false)
         setPactProgress(0)
       }, 860)
-      schedule(() => {
-        void getGutoMemory().then((fresh) => {
-          if (fresh) setMemory(fresh)
-        }).catch(() => {})
-      }, 1200)
+    }, [effectRegistry, persistProfile, schedule, trackBehaviorEvent])
+
+  const recoverPostPact = useCallback(async (
+    finalName: string,
+    finalLanguage: SupportedLanguage,
+    maxAttempts = 45,
+  ) => {
+    setPactFlowState("generating_artifacts")
+    const fresh = await recoverDurablePostPactArtifacts({ read: getGutoMemory, attempts: maxAttempts })
+    if (fresh) {
+      finalizeReadyPact(fresh, finalName, finalLanguage)
+      return true
+    }
+    setPactFlowState("recoverable_error")
+    setIsHoldingPact(false)
+    setWhiteout(false)
+    gutoAudio.playGutoFeedback("error")
+    setProfileSaveError(stageCopy[finalLanguage].profileSaveError)
+    return false
+  }, [finalizeReadyPact])
+
+  const startSystem = useCallback(
+    async (finalName: string, finalLanguage: SupportedLanguage) => {
+      if (pactCompleteRef.current) return
+      pactCompleteRef.current = true
+      setPactFlowState("confirming")
+      gutoAudio.stopGutoSound("hold_charge")
+      setProfileSaveError(null)
+
+      const updated = await commitPactOnceAndRecover({
+        commit: () => persistMemory({
+          name: finalName,
+          language: finalLanguage,
+          trainedToday: false,
+          xpEvent: "grant_initial_xp",
+        }, { optimistic: false }),
+        read: getGutoMemory,
+        onPolling: () => setPactFlowState("generating_artifacts"),
+      })
+
+      if (updated) {
+        finalizeReadyPact(updated, finalName, finalLanguage)
+        return
+      }
+      setPactFlowState("recoverable_error")
+      setIsHoldingPact(false)
+      setWhiteout(false)
+      gutoAudio.playGutoFeedback("error")
+      setProfileSaveError(stageCopy[finalLanguage].profileSaveError)
     },
-    [effectRegistry, persistMemory, persistProfile, schedule, setMemory, trackBehaviorEvent]
+    [finalizeReadyPact, persistMemory]
   )
 
   const handleConsentAccepted = useCallback(async () => {
     // Fase 2A — o aceite tem de ser gravado no backend (fonte de verdade).
-    // Se o backend falhar, NÃO avança nem finge que salvou.
+    // O POST é idempotente: se a resposta se perder depois do commit, reconcilia
+    // pela leitura durável antes de decidir se pode avançar.
     setProfileSaveError(null)
-    let updated: GutoMemory | null = null
-    try {
-      updated = await acceptGutoConsent()
-    } catch {
-      updated = null
-    }
+    const updated = await acceptConsentOnceAndRecover<GutoMemory>({
+      accept: acceptGutoConsent,
+      read: getGutoMemory,
+    })
     if (!updated) {
       gutoAudio.playGutoFeedback("error")
       setProfileSaveError(stageCopy[selectedLanguage].profileSaveError)
@@ -1396,6 +1492,8 @@ export function GutoApp({
       setNameGate(null)
       setCommittedName(normalizedName)
       pactCompleteRef.current = false
+      pactFinalizedRef.current = false
+      setPactFlowState("idle")
       setPactProgress(0)
       setIsHoldingPact(false)
       setWhiteout(false)
@@ -1404,7 +1502,7 @@ export function GutoApp({
         meta: { nameLength: normalizedName.length, language: selectedLanguage },
       })
       persistProfile({ userName: normalizedName, language: selectedLanguage, onboardingComplete: false, namingConfirmed: true })
-      persistMemory({ name: normalizedName, confirmedName, language: selectedLanguage })
+      persistMemory({ name: normalizedName, confirmedName, sovereignNameConfirmed: true, language: selectedLanguage })
     },
     [effectRegistry, persistMemory, persistProfile, selectedLanguage]
   )
@@ -1412,19 +1510,25 @@ export function GutoApp({
   const handleCalibrationComplete = useCallback(
     async (calibration: GutoMemoryPayload) => {
       setProfileSaveError(null)
-      const updated = await persistMemory({
-        ...calibration,
-        language: selectedLanguage,
-        foodRestrictions: calibration.foodRestrictions?.trim(),
-        trainingPathology: calibration.trainingPathology?.trim(),
-        trainingStatus: calibration.trainingLevel,
-        trainingLimitations: calibration.trainingPathology?.trim(),
-      }, { optimistic: false })
+      const updated = await commitCalibrationOnceAndRecover(
+        () => persistMemory({
+          ...calibration,
+          language: selectedLanguage,
+          foodRestrictions: calibration.foodRestrictions?.trim(),
+          trainingPathology: calibration.trainingPathology?.trim(),
+          trainingStatus: calibration.trainingLevel,
+          trainingLimitations: calibration.trainingPathology?.trim(),
+        }, { optimistic: false }),
+        getGutoMemory,
+        hasCompleteGutoCalibration,
+      )
       if (!updated) {
         gutoAudio.playGutoFeedback("error")
         setProfileSaveError(stageCopy[selectedLanguage].profileSaveError)
         return
       }
+      memoryRef.current = updated
+      setMemory(updated)
       persistProfile({ calibrationComplete: true, onboardingComplete: false })
       trackBehaviorEvent("calibration_completed", { ...calibration })
       setStage("pact")
@@ -1648,7 +1752,7 @@ export function GutoApp({
       const finalName = formatGutoName(validation.normalized)
       setNameGate(null)
       setProfileSaveError(null)
-      const updated = await persistMemory({ name: finalName, confirmedName }, { optimistic: false })
+      const updated = await persistMemory({ name: finalName, confirmedName, sovereignNameConfirmed: true }, { optimistic: false })
       if (!updated) {
         gutoAudio.playGutoFeedback("error")
         setProfileSaveError(stageCopy[selectedLanguage].profileSaveError)
@@ -1957,15 +2061,6 @@ export function GutoApp({
       setPactProgress((current) => {
         const next = Math.min(current + HOLD_INCREMENT, 100)
         effectRegistry.emit("pact_hold_tick", { value: next })
-
-        if (next >= 100) {
-          clearPactInterval()
-          startSystem(
-            committedName || formatGutoName(draftName || userName || ""),
-            selectedLanguage
-          )
-        }
-
         return next
       })
     }, HOLD_INTERVAL_MS)
@@ -1973,15 +2068,20 @@ export function GutoApp({
     return clearPactInterval
   }, [
     clearPactInterval,
-    committedName,
-    draftName,
     effectRegistry,
     isHoldingPact,
-    selectedLanguage,
     stage,
-    startSystem,
-    userName,
   ])
+
+  useEffect(() => {
+    if (stage !== "pact" || pactProgress < 100 || pactCompleteRef.current) return
+    clearPactInterval()
+    setIsHoldingPact(false)
+    void startSystem(
+      committedName || formatGutoName(draftName || userName || ""),
+      selectedLanguage
+    )
+  }, [clearPactInterval, committedName, draftName, pactProgress, selectedLanguage, stage, startSystem, userName])
 
   useEffect(() => {
     if (!user?.userId) return
@@ -2028,6 +2128,7 @@ export function GutoApp({
     gutoAudio.stopGutoSound('hold_charge')
     setIsHoldingPact(false)
     setPactProgress(0)
+    setPactFlowState("idle")
   }, [clearPactInterval, pactProgress, stage])
 
   // ── Invite claim flow ──────────────────────────────────────────────────────
@@ -2074,7 +2175,10 @@ export function GutoApp({
       setInviteSuccess(true)
       clearPendingInviteStorage()
       setPendingInviteToken(null)
-      schedule(() => {
+      // This transition must not share the generic animation timers. Calling
+      // login restarts authenticated hydration, whose cleanup clears those
+      // timers and could otherwise leave the user on the success screen.
+      scheduleInviteTransition(() => {
         login({ ...res, role: res.role ?? "student" })
         const inviteResolvedName = firstRealGutoName(res.name, inviteClaimData?.name)
         setGutoUserId(res.userId)
@@ -2088,16 +2192,16 @@ export function GutoApp({
             onboardingComplete: false,
           }))
         }
-        setStage("naming")
+        setStage(stageAfterInviteClaim())
         router.replace("/")
-      }, 2000)
+      })
     } catch (err: unknown) {
       void err
       gutoAudio.playGutoFeedback("error")
       setInviteError(ic.activationFailed)
       setInviteSubmitting(false)
     }
-  }, [pendingInviteToken, inviteSubmitting, selectedLanguage, invitePassword, inviteConfirmPassword, inviteClaimData, login, router, schedule])
+  }, [pendingInviteToken, inviteSubmitting, selectedLanguage, invitePassword, inviteConfirmPassword, inviteClaimData, login, router, scheduleInviteTransition])
 
   const handleExerciseQuestion = useCallback((exercise: MissionExercise) => {
     setPendingExerciseQuestion({
@@ -2151,6 +2255,43 @@ export function GutoApp({
     formatGutoName(settingsNameDraft) !== userLabel &&
     !isValidatingName
 
+  const mergeMemoryPatch = useCallback((patch: Partial<GutoMemory>) => {
+    setMemory((previous) => {
+      if (!previous) return previous
+      const changed = (Object.entries(patch) as Array<[keyof GutoMemory, unknown]>)
+        .some(([key, value]) => !sameMemoryPatchValue(previous[key], value))
+      return changed ? { ...previous, ...patch } : previous
+    })
+  }, [])
+
+  // A geração manual/regeração da aba Dieta é deduplicada aqui. O bootstrap
+  // oficial pós-pacto acontece no backend e não passa por esta função.
+  const dietGenerationInFlightRef = useRef(new Map<string, Promise<DietPlan>>())
+  const requestDietGeneration = useCallback((language: SupportedLanguage) => {
+    // O estado espelhado gutoUserId começa como "guest" enquanto o AuthProvider
+    // hidrata. Para a dieta, a identidade autenticada já disponível é a chave
+    // soberana; assim Chat e Dieta não abrem flights diferentes durante o boot.
+    const generationUserId = user?.userId || gutoUserId
+    const key = `${generationUserId}:${language}`
+    const activeRequest = dietGenerationInFlightRef.current.get(key)
+    if (activeRequest) return activeRequest
+
+    const request = generateDietPlan(language, generationUserId)
+    dietGenerationInFlightRef.current.set(key, request)
+    void request.then(() => {
+      window.setTimeout(() => {
+        if (dietGenerationInFlightRef.current.get(key) === request) {
+          dietGenerationInFlightRef.current.delete(key)
+        }
+      }, 1_500)
+    }, () => {
+      if (dietGenerationInFlightRef.current.get(key) === request) {
+        dietGenerationInFlightRef.current.delete(key)
+      }
+    })
+    return request
+  }, [gutoUserId, user?.userId])
+
   const chatContent = useMemo(() => (
     <ChatTab
       key={`chat-${gutoUserId}-${selectedLanguage}`}
@@ -2168,15 +2309,15 @@ export function GutoApp({
       vitalState={vitalState}
       initialXpGranted={memory?.initialXpGranted}
       initialXpRewardSeen={memory?.initialXpRewardSeen}
-      onXpRewardSeen={() => {
+      onXpRewardSeen={async () => {
         if (memory) {
           const updated = { ...memory, initialXpRewardSeen: true };
           setMemory(updated);
-          persistMemory({ initialXpRewardSeen: true });
+          await persistMemory({ initialXpRewardSeen: true });
         }
       }}
       onProfileUpdate={updateUserProfileField}
-      onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
+      onMemoryPatch={mergeMemoryPatch}
       onChangeLanguage={(nextLang) => {
         setSelectedLanguage(nextLang)
         writeConfirmedLanguageStorage(nextLang)
@@ -2190,7 +2331,7 @@ export function GutoApp({
       isAvatarActive={activeTab === "guto" && !isKeyboardOpen}
       isKeyboardOpen={isKeyboardOpen}
     />
-  ), [activeTab, evolution, gutoUserId, isKeyboardOpen, localizedWorkoutPlan, vitalState, memory, pendingExerciseQuestion, pendingFoodQuestion, persistMemory, persistProfile, selectedLanguage, updateUserProfileField, userLabel])
+  ), [activeTab, evolution, gutoUserId, isKeyboardOpen, localizedWorkoutPlan, vitalState, memory, mergeMemoryPatch, pendingExerciseQuestion, pendingFoodQuestion, persistMemory, persistProfile, selectedLanguage, updateUserProfileField, userLabel])
 
   const validationLocationMode = useMemo(
     () =>
@@ -2215,6 +2356,8 @@ export function GutoApp({
             workoutPlan={localizedWorkoutPlan}
             currentEvolution={evolution}
             validationHistory={memory?.validationHistory}
+            onMemoryPatch={mergeMemoryPatch}
+            onOpenChat={() => setActiveTab("guto")}
           />
         )
       case "evolucoes":
@@ -2262,12 +2405,14 @@ export function GutoApp({
             language={selectedLanguage}
             onFoodDoubt={handleFoodDoubt}
             memory={memory}
+            onMemoryPatch={mergeMemoryPatch}
+            onGenerateDiet={requestDietGeneration}
           />
         )
       default:
         return null
     }
-  }, [activeTab, arenaRefreshKey, evolution, gutoUserId, handleAdaptedMissionComplete, handleExerciseQuestion, handleFoodDoubt, handleMissionComplete, localizedWorkoutPlan, memory, selectedLanguage, userLabel, workoutMissingFields])
+  }, [activeTab, arenaRefreshKey, evolution, gutoUserId, handleAdaptedMissionComplete, handleExerciseQuestion, handleFoodDoubt, handleMissionComplete, localizedWorkoutPlan, memory, mergeMemoryPatch, requestDietGeneration, selectedLanguage, userLabel, workoutMissingFields])
 
   if (authLoading || !isHydrated || (user && user.role !== "student")) {
     return (
@@ -2697,8 +2842,17 @@ export function GutoApp({
               <motion.button
                 type="button"
                 onPointerDown={() => {
+                  if (pactFlowState === "recoverable_error") {
+                    setProfileSaveError(null)
+                    void recoverPostPact(
+                      committedName || formatGutoName(draftName || userName || ""),
+                      selectedLanguage,
+                    )
+                    return
+                  }
                   if (isHoldingPact || pactCompleteRef.current) return
                   gutoAudio.playGutoFeedback("hold_charge")
+                  setPactFlowState("holding")
                   setIsHoldingPact(true)
                 }}
                 onPointerUp={stopHold}

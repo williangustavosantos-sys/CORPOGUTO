@@ -18,8 +18,12 @@ import { formatHuman, type TeamDraft } from "./utils"
 import { blockCreateStudent, coachesForTeam, studentRequiresCoach } from "@/lib/panel-rules"
 import { usePanelI18n } from "@/lib/panel-i18n"
 
+// BUG 5 — responsivo: flex-col + altura limitada (dvh por causa da barra dinâmica
+// do Safari iOS). Sem isto, em janela baixa/celular o modal crescia além da tela e
+// o footer (botão Criar) ficava recortado e inalcançável. Com o corpo rolável e
+// header/footer fixos (shrink-0), a ação principal fica SEMPRE visível.
 const dialogClass =
-  "p-0 max-w-md gap-0 overflow-hidden border bg-transparent text-slate-900"
+  "p-0 max-w-md gap-0 overflow-hidden border bg-transparent text-slate-900 flex flex-col max-h-[90dvh] sm:max-h-[85dvh]"
 
 const dialogStyle: React.CSSProperties = {
   background: T.surface,
@@ -33,12 +37,17 @@ const headerStyle: React.CSSProperties = {
   padding: "20px 24px 16px",
   borderBottom: `1px solid ${T.borderSoft}`,
   background: T.surfaceAlt,
+  flexShrink: 0,
 }
 
 const bodyStyle: React.CSSProperties = {
   padding: "20px 24px",
   display: "grid",
   gap: 14,
+  // Só o corpo rola quando os campos não cabem; header/footer ficam fixos.
+  flex: "1 1 auto",
+  minHeight: 0,
+  overflowY: "auto",
 }
 
 const footerStyle: React.CSSProperties = {
@@ -48,6 +57,7 @@ const footerStyle: React.CSSProperties = {
   gap: 10,
   justifyContent: "flex-end",
   background: "rgba(0,0,0,0.2)",
+  flexShrink: 0,
 }
 
 // ─── CreateStudentDialog ──────────────────────────────────────────────────────

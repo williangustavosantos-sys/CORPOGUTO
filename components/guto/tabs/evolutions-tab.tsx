@@ -1,14 +1,15 @@
 "use client"
 
 import { motion } from "framer-motion"
-import { Lock } from "lucide-react"
+import { Lock, Sparkles, Trophy, Zap } from "lucide-react"
+
+import { getNextGutoEvolutionXp } from "@/lib/guto-evolution"
+import type { GutoMemory } from "@/lib/api/guto"
+import type { EvolutionStage } from "@/types/contract"
 
 import { GutoAvatarController } from "../guto-avatar-controller"
 import { getLanguage, translations } from "../translations"
 import { evolutionCardsFixture } from "../view-models"
-import { getNextGutoEvolutionXp } from "@/lib/guto-evolution"
-import type { EvolutionStage } from "@/types/contract"
-import type { GutoMemory } from "@/lib/api/guto"
 
 interface EvolutionsTabProps {
   userName: string
@@ -19,178 +20,221 @@ interface EvolutionsTabProps {
 
 const evolutionCopy = {
   "pt-BR": {
-    desire: "Desejo em camadas", active: "Ativo",
-    released: "Forma liberada. Nitidez total no presente.", blocked: "Bloqueado até",
+    home: "Casa do GUTO",
+    companion: (name: string) => (name ? `GUTO & ${name}` : "Companheiro ativo"),
+    stage: "Estágio atual",
+    transformation: "Transformação",
+    next: "Próxima evolução",
+    maxStage: "Forma máxima atual",
+    xp: "XP acumulado",
+    unlocks: "Desbloqueios",
+    active: "Ativo agora",
+    unlocked: "Liberado",
+    locked: "Bloqueado",
     workoutsTo: (n: number, stage: string) => `${n} treino${n === 1 ? "" : "s"} para ${stage}`,
+    body:
+      "Aqui é onde o GUTO cresce com a relação: treino validado, decisão respeitada e semana reorganizada viram evolução visível.",
   },
   "en-US": {
-    desire: "Desire in layers", active: "Active",
-    released: "Form unlocked. Full sharpness in the present.", blocked: "Locked until",
+    home: "GUTO Home",
+    companion: (name: string) => (name ? `GUTO & ${name}` : "Active companion"),
+    stage: "Current stage",
+    transformation: "Transformation",
+    next: "Next evolution",
+    maxStage: "Current max form",
+    xp: "Total XP",
+    unlocks: "Unlocks",
+    active: "Active now",
+    unlocked: "Unlocked",
+    locked: "Locked",
     workoutsTo: (n: number, stage: string) => `${n} workout${n === 1 ? "" : "s"} to ${stage}`,
+    body:
+      "This is where GUTO grows with the relationship: validated workouts, respected decisions, and reorganized weeks become visible evolution.",
   },
   "it-IT": {
-    desire: "Desiderio a strati", active: "Attivo",
-    released: "Forma sbloccata. Nitidezza totale nel presente.", blocked: "Bloccato fino a",
+    home: "Casa di GUTO",
+    companion: (name: string) => (name ? `GUTO & ${name}` : "Compagno attivo"),
+    stage: "Stadio attuale",
+    transformation: "Trasformazione",
+    next: "Prossima evoluzione",
+    maxStage: "Forma massima attuale",
+    xp: "XP totale",
+    unlocks: "Sblocchi",
+    active: "Attivo ora",
+    unlocked: "Sbloccato",
+    locked: "Bloccato",
     workoutsTo: (n: number, stage: string) => `${n} allenament${n === 1 ? "o" : "i"} per ${stage}`,
+    body:
+      "Qui GUTO cresce con la relazione: allenamenti validati, decisioni rispettate e settimane riorganizzate diventano evoluzione visibile.",
   },
 } as const
 
-export function EvolutionsTab({ language, currentEvolution, memory }: EvolutionsTabProps) {
+function getFirstName(value: string) {
+  return value.trim().split(/\s+/)[0] || ""
+}
+
+export function EvolutionsTab({ userName, language, currentEvolution, memory }: EvolutionsTabProps) {
   const validLang = getLanguage(language)
   const locale = translations[validLang]
   const copy = evolutionCopy[validLang]
   const currentXp = memory?.totalXp ?? 0
-  const nextTargetXp = getNextGutoEvolutionXp(currentXp) ?? currentXp
-  const progress = nextTargetXp > 0 ? Math.min(100, (currentXp / nextTargetXp) * 100) : 100
+  const currentIndex = Math.max(
+    0,
+    evolutionCardsFixture.findIndex((card) => card.stage === currentEvolution)
+  )
+  const currentCard = evolutionCardsFixture[currentIndex] ?? evolutionCardsFixture[0]
   const nextCard = evolutionCardsFixture.find((card) => card.requiredXp > currentXp)
-  const workoutsRemaining = nextCard && nextTargetXp > currentXp
-    ? Math.ceil((nextTargetXp - currentXp) / 100)
-    : 0
+  const nextTargetXp = getNextGutoEvolutionXp(currentXp) ?? nextCard?.requiredXp ?? currentXp
+  const currentFloorXp = currentCard.requiredXp
+  const progressRange = Math.max(1, nextTargetXp - currentFloorXp)
+  const progress = nextCard ? Math.max(0, Math.min(100, ((currentXp - currentFloorXp) / progressRange) * 100)) : 100
+  const workoutsRemaining =
+    nextCard && nextTargetXp > currentXp ? Math.ceil((nextTargetXp - currentXp) / 100) : 0
+  const firstName = getFirstName(userName)
 
   return (
-    <div className="flex h-full flex-col pb-4">
-      <div className="px-1 pb-4 pt-2 text-center shrink-0">
-        <p className="font-mono text-[9px] font-black uppercase tracking-[0.22em] text-(--guto-cyan) mb-1">
-          {locale.evoSubtitle}
+    <div className="flex h-full min-h-0 flex-col pb-3">
+      <div className="shrink-0 px-1 pb-3 pt-2 text-center">
+        <p className="mb-1 font-mono text-[9px] font-black uppercase tracking-[0.22em] text-(--guto-cyan)">
+          {copy.home}
         </p>
         <h1 className="mx-auto max-w-[18rem] text-balance text-[1.25rem] font-black uppercase leading-tight tracking-[0.08em] text-(--guto-navy)">
           {locale.evoTitle}
         </h1>
       </div>
 
-      <div className="flex-1 space-y-3 overflow-y-auto pr-1">
-        {evolutionCardsFixture.map((card, index) => {
-          const isCurrent = card.stage === currentEvolution
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+        <motion.section
+          className="guto-deboss-deep relative overflow-hidden rounded-[1.9rem] px-4 pb-5 pt-4"
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <div className="pointer-events-none absolute inset-x-8 top-10 h-44 rounded-full bg-[radial-gradient(circle,rgba(82,231,255,0.18)_0%,transparent_68%)]" />
 
-          return (
-            <motion.div
-              key={card.stage}
-              className={
-                isCurrent
-                  ? "guto-deboss-deep relative overflow-hidden rounded-[1.9rem] px-4 py-4"
-                  : "guto-deboss relative overflow-hidden rounded-[1.9rem] px-4 py-4"
-              }
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.08 }}
-            >
-              <div className="absolute inset-y-0 right-0 w-24 bg-[radial-gradient(circle_at_center,rgba(82,231,255,0.14)_0%,transparent_74%)]" />
-
-              <div className="relative flex items-center gap-4">
-                <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-[1.6rem]">
-                  {isCurrent ? (
-                    <GutoAvatarController
-                      stage={card.stage}
-                      size="md"
-                      showPlatform={false}
-                      className="w-full"
-                      interactive={false}
-                    />
-                  ) : (
-                    <>
-                      {/* avatar da fase, porém apagado (preview do que vem) */}
-                      <div className="h-full w-full opacity-45 grayscale">
-                        <GutoAvatarController
-                          stage={card.stage}
-                          size="md"
-                          showPlatform={false}
-                          className="w-full"
-                          interactive={false}
-                          isActive={false}
-                        />
-                      </div>
-                      {/* cadeado na frente */}
-                      <div className="absolute inset-0 flex items-center justify-center bg-[rgba(244,249,253,0.35)]">
-                        <div className="guto-deboss flex h-9 w-9 items-center justify-center rounded-full">
-                          <Lock className="h-4 w-4 text-[rgba(13,35,65,0.5)]" />
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                <div className="flex-1">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[rgba(13,35,65,0.38)]">
-                        {locale.level}
-                      </p>
-                      <h2 className="mt-1 text-xl font-black tracking-[0.16em] text-(--guto-navy)">
-                        {card.label}
-                      </h2>
-                    </div>
-
-                    {isCurrent ? (
-                      <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-(--guto-cyan)">
-                        {copy.active}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <p className="mt-2 text-sm text-[rgba(13,35,65,0.64)]">
-                    {isCurrent
-                      ? copy.released
-                      : `${copy.blocked} ${card.requiredXp.toLocaleString()} XP.`}
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-          )
-        })}
-      </div>
-
-      <div className="guto-deboss mt-4 rounded-[1.9rem] px-4 py-4">
-        <div className="flex items-center gap-4">
-          <div className="relative h-24 w-24 shrink-0">
-            <svg className="h-full w-full -rotate-90" viewBox="0 0 100 100">
-              <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(13,35,65,0.1)" strokeWidth="8" />
-              <motion.circle
-                cx="50"
-                cy="50"
-                r="42"
-                fill="none"
-                stroke="rgba(82,231,255,0.95)"
-                strokeWidth="8"
-                strokeLinecap="round"
-                strokeDasharray="264"
-                initial={{ strokeDashoffset: 264 }}
-                animate={{ strokeDashoffset: 264 * (1 - progress / 100) }}
-                transition={{ duration: 0.9 }}
-              />
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-[rgba(13,35,65,0.38)]">
-                XP
-              </span>
-              <span className="text-xl font-black text-(--guto-navy)">
-                {currentXp.toLocaleString()}
-              </span>
+          <div className="relative flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-mono text-[9px] font-black uppercase tracking-[0.2em] text-[rgba(13,35,65,0.42)]">
+                {copy.stage}
+              </p>
+              <h2 className="mt-1 text-2xl font-black uppercase tracking-[0.16em] text-(--guto-navy)">
+                {currentCard.label}
+              </h2>
             </div>
+            <span className="rounded-full border border-[rgba(82,231,255,0.5)] bg-[rgba(82,231,255,0.14)] px-3 py-1.5 font-mono text-[10px] font-black uppercase tracking-[0.14em] text-(--guto-navy)">
+              {copy.active}
+            </span>
           </div>
 
-          <div className="min-w-0 flex-1">
-            <p className="text-sm text-[rgba(13,35,65,0.68)]">{locale.evoAuto1}</p>
-            <p className="mt-1 text-sm font-semibold text-(--guto-navy)">{locale.evoAuto2}</p>
+          <div className="relative mx-auto mt-1 flex h-[250px] items-center justify-center overflow-visible">
+            <GutoAvatarController
+              stage={currentEvolution}
+              size="lg"
+              showPlatform
+              className="scale-[1.42]"
+            />
+          </div>
 
-            <div className="mt-4 h-2 overflow-hidden rounded-full bg-[rgba(13,35,65,0.08)]">
+          <div className="relative text-center">
+            <p className="font-mono text-[10px] font-black uppercase tracking-[0.18em] text-(--guto-cyan)">
+              {copy.companion(firstName)}
+            </p>
+            <p className="mx-auto mt-2 max-w-[19rem] text-sm font-semibold leading-snug text-[rgba(13,35,65,0.66)]">
+              {copy.body}
+            </p>
+          </div>
+        </motion.section>
+
+        <section className="grid grid-cols-2 gap-3">
+          <motion.div
+            className="guto-frost-panel rounded-[1.55rem] px-4 py-4"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.08 }}
+          >
+            <div className="mb-3 flex items-center gap-2 text-(--guto-cyan)">
+              <Zap className="h-4 w-4" aria-hidden="true" />
+              <span className="font-mono text-[9px] font-black uppercase tracking-[0.14em]">{copy.xp}</span>
+            </div>
+            <p className="text-2xl font-black leading-none text-(--guto-navy)">
+              {currentXp.toLocaleString()}
+            </p>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-[rgba(13,35,65,0.08)]">
               <motion.div
-                className="h-full rounded-full bg-[linear-gradient(90deg,rgba(82,231,255,0.65),rgba(82,231,255,1))]"
+                className="h-full rounded-full bg-[linear-gradient(90deg,rgba(82,231,255,0.62),rgba(82,231,255,1))]"
                 initial={{ width: 0 }}
                 animate={{ width: `${progress}%` }}
-                transition={{ duration: 0.85, delay: 0.2 }}
+                transition={{ duration: 0.85, delay: 0.16 }}
               />
             </div>
+          </motion.div>
 
-            <div className="mt-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-[rgba(13,35,65,0.4)]">
-              <span>
-                {workoutsRemaining > 0 && nextCard
-                  ? copy.workoutsTo(workoutsRemaining, nextCard.label)
-                  : locale.nextEvolution}
+          <motion.div
+            className="guto-frost-panel rounded-[1.55rem] px-4 py-4"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.12 }}
+          >
+            <div className="mb-3 flex items-center gap-2 text-(--guto-cyan)">
+              <Trophy className="h-4 w-4" aria-hidden="true" />
+              <span className="font-mono text-[9px] font-black uppercase tracking-[0.14em]">
+                {nextCard ? copy.next : copy.maxStage}
               </span>
-              <span>{nextTargetXp.toLocaleString()} XP</span>
             </div>
+            <p className="text-xl font-black uppercase tracking-[0.12em] text-(--guto-navy)">
+              {nextCard?.label ?? currentCard.label}
+            </p>
+            <p className="mt-2 font-mono text-[10px] font-black uppercase tracking-[0.08em] text-[rgba(13,35,65,0.46)]">
+              {workoutsRemaining > 0 && nextCard
+                ? copy.workoutsTo(workoutsRemaining, nextCard.label)
+                : locale.nextEvolution}
+            </p>
+          </motion.div>
+        </section>
+
+        <section className="guto-frost-panel rounded-[1.75rem] px-4 py-4">
+          <div className="mb-3 flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-(--guto-cyan)" aria-hidden="true" />
+            <h2 className="font-mono text-[10px] font-black uppercase tracking-[0.2em] text-(--guto-navy)">
+              {copy.unlocks}
+            </h2>
           </div>
-        </div>
+
+          <div className="space-y-2">
+            {evolutionCardsFixture.map((card) => {
+              const isCurrent = card.stage === currentEvolution
+              const unlocked = currentXp >= card.requiredXp
+              return (
+                <div
+                  key={card.stage}
+                  className={
+                    isCurrent
+                      ? "flex items-center justify-between gap-3 rounded-[1.15rem] border border-[rgba(82,231,255,0.52)] bg-[rgba(82,231,255,0.13)] px-3 py-2.5"
+                      : "flex items-center justify-between gap-3 rounded-[1.15rem] border border-white/60 bg-white/42 px-3 py-2.5"
+                  }
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-black uppercase tracking-[0.12em] text-(--guto-navy)">
+                      {card.label}
+                    </p>
+                    <p className="mt-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-[rgba(13,35,65,0.42)]">
+                      {card.requiredXp.toLocaleString()} XP
+                    </p>
+                  </div>
+                  {unlocked ? (
+                    <span className="font-mono text-[9px] font-black uppercase tracking-[0.12em] text-(--guto-cyan)">
+                      {isCurrent ? copy.active : copy.unlocked}
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1.5 font-mono text-[9px] font-black uppercase tracking-[0.12em] text-[rgba(13,35,65,0.42)]">
+                      <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                      {copy.locked}
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </section>
       </div>
     </div>
   )

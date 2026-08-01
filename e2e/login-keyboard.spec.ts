@@ -43,12 +43,16 @@ test.describe('login mobile keyboard sync (gap A)', () => {
     await page.evaluate(() => {
       const vv = window.visualViewport
       if (!vv) return
+      const input = document.querySelector('input[autocomplete="username"]') as HTMLInputElement | null
+      input?.focus()
+      input?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
       const desc = Object.getOwnPropertyDescriptor(window.visualViewport, 'height')
       Object.defineProperty(window.visualViewport, 'height', {
         configurable: true,
         get: () => Math.max(320, (window.innerHeight ?? 800) - 360),
       })
       Object.defineProperty(window.visualViewport, 'offsetTop', { configurable: true, get: () => 0 })
+      window.dispatchEvent(new FocusEvent('focusin'))
       window.dispatchEvent(new Event('resize'))
       vv.dispatchEvent(new Event('resize'))
       ;(window as unknown as { __restoreVisualViewport?: () => void }).__restoreVisualViewport = () => {

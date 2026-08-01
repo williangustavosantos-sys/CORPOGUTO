@@ -6,9 +6,10 @@ backend Express concentra as chamadas de IA, voz e transcricao.
 ## Estrutura
 
 - `guto-app-v0`: app Next.js.
-- `guto-backend`: API Express. Em producao, configure a URL publica em
-  `NEXT_PUBLIC_API_URL`. Em desenvolvimento, o app usa `http://localhost:3001`
-  quando essa variavel nao existir.
+- `guto-backend`: API Express. Em producao/preview, configure a URL publica em
+  `NEXT_PUBLIC_GUTO_API_URL` (ou `NEXT_PUBLIC_API_URL`, legado). Em
+  desenvolvimento, o app usa `http://localhost:3001` quando essa variavel nao
+  existir.
 
 ## Rodar Localmente
 
@@ -22,7 +23,8 @@ backend Express concentra as chamadas de IA, voz e transcricao.
    `OPENAI_API_KEY=...`
 4. Opcionalmente configure `guto-app-v0/.env.local` quando quiser apontar para
    um backend publicado:
-   `NEXT_PUBLIC_API_URL=https://sua-api-publica`
+   `GUTO_BACKEND_PROXY_URL=https://sua-api-publica`
+   `NEXT_PUBLIC_GUTO_API_URL=https://sua-api-publica`
 5. Rode o backend:
    `cd guto-backend && npm run dev`
 6. Rode o app:

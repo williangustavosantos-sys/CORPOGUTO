@@ -1,16 +1,17 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { Apple, ChevronDown, ChevronUp, ClipboardList, Coffee, Droplets, Flame, Moon, RefreshCw, Salad, Utensils, Wheat, Zap, type LucideIcon } from "lucide-react"
 
-import { getDietPlan, generateDietPlan, type DietPlan, type DietMeal, type DietFood } from "@/lib/api/guto"
+import { getDietPlan, getGutoMemory, type DietPlan, type DietMeal, type DietFood, type GutoMemory } from "@/lib/api/guto"
 import { ApiError } from "@/lib/api/client"
 import { DietPlanValidationError, sanitizeDietPlan } from "@/lib/diet-plan"
 import { getLanguage } from "../translations"
 import type { ValidLanguage } from "../translations"
 import { DietProfileNotice } from "../memory-context/diet-profile-notice"
 import { gutoAudio } from "@/lib/audio-haptics"
+import type { SupportedLanguage } from "@/types/contract"
 
 // ─── Copy ────────────────────────────────────────────────────────────────────
 
@@ -163,7 +164,9 @@ interface DietTabProps {
   userId: string
   language: string
   onFoodDoubt: (food: DietFood, meal: DietMeal) => void
-  memory: import("@/lib/api/guto").GutoMemory | null
+  memory: GutoMemory | null
+  onMemoryPatch?: (patch: Partial<GutoMemory>) => void
+  onGenerateDiet: (language: SupportedLanguage) => Promise<DietPlan>
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -183,11 +186,22 @@ function getWeekRange(generatedAt: string, language: ValidLanguage): string {
 // sem carimbo de idioma só regeneram para idiomas não-default, evitando refazer
 // dietas pt-BR válidas à toa.
 function isDietLanguageStale(plan: DietPlan, language: ValidLanguage): boolean {
-  if (plan.lockedByCoach || plan.manualOverride || plan.source === "coach_manual" || plan.source === "mixed") {
+  if (!isAdjustableDietPlan(plan)) {
     return false
   }
   if (plan.language) return plan.language !== language
   return language !== "pt-BR"
+}
+
+function isAdjustableDietPlan(plan: DietPlan): boolean {
+  return !(
+    plan.lockedByCoach ||
+    plan.manualOverride ||
+    plan.source === "coach_manual" ||
+    plan.source === "mixed" ||
+    plan.planSource === "admin_override" ||
+    plan.planSource === "coach_override"
+  )
 }
 
 function isMissingProfileError(error: unknown) {
@@ -202,6 +216,22 @@ function getDietFailureReason(error: unknown) {
   if (typeof details !== "object" || details === null) return null
   const reason = (details as { reason?: unknown }).reason
   return typeof reason === "string" ? reason : null
+}
+
+function getDietPolicyCode(error: unknown) {
+  if (!(error instanceof ApiError)) return null
+  const details = error.details
+  if (typeof details !== "object" || details === null) return null
+  const code = (details as { code?: unknown }).code
+  return typeof code === "string" ? code : null
+}
+
+function getDietPolicyError(error: unknown) {
+  if (!(error instanceof ApiError)) return null
+  const details = error.details
+  if (typeof details !== "object" || details === null) return null
+  const policyError = (details as { error?: unknown }).error
+  return typeof policyError === "string" ? policyError : null
 }
 
 function getDietErrorMessage(
@@ -490,7 +520,7 @@ function CoachDietView({ coachDiet, copy }: { coachDiet: CoachDietDay; copy: Coa
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps) {
+export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch, onGenerateDiet }: DietTabProps) {
   const validLang = getLanguage(language)
   const copy = dietCopy[validLang]
 
@@ -502,7 +532,7 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
 
   const weekDaysOrder = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const
   const todayCoachDiet = memory?.weeklyDietPlan?.days?.[weekDaysOrder[new Date().getDay()]] ?? null
-  const dietProfileKey = useMemo(() => JSON.stringify({
+  const dietProfileKey = JSON.stringify({
     heightCm: memory?.heightCm ?? null,
     weightKg: memory?.weightKg ?? null,
     trainingGoal: memory?.trainingGoal ?? null,
@@ -513,18 +543,19 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
     foodRestrictions: memory?.foodRestrictions ?? null,
     country: memory?.country ?? null,
     countryCode: memory?.countryCode ?? null,
-  }), [
-    memory?.heightCm,
-    memory?.weightKg,
-    memory?.trainingGoal,
-    memory?.biologicalSex,
-    memory?.userAge,
-    memory?.trainingLevel,
-    memory?.trainingStatus,
-    memory?.foodRestrictions,
-    memory?.country,
-    memory?.countryCode,
-  ])
+    city: memory?.city ?? null,
+    resolvedFoodRestriction: memory?.resolvedFields?.foodRestriction
+      ? {
+          rawValue: memory.resolvedFields.foodRestriction.rawValue,
+          normalizedValue: memory.resolvedFields.foodRestriction.normalizedValue ?? null,
+          possibleMeaning: memory.resolvedFields.foodRestriction.possibleMeaning ?? null,
+          riskTags: [...(memory.resolvedFields.foodRestriction.riskTags ?? [])].sort(),
+          confidence: memory.resolvedFields.foodRestriction.confidence ?? null,
+          status: memory.resolvedFields.foodRestriction.status,
+        }
+      : null,
+    dietGenerationStatus: memory?.dietGenerationStatus ?? null,
+  })
 
   useEffect(() => {
     latestMemoryRef.current = memory
@@ -553,9 +584,25 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
     )
   }, [])
 
-  function isProfileComplete(): boolean {
-    return isProfileCompleteFor(memory)
-  }
+  const loadFreshMemoryForDiet = useCallback(async (force = false) => {
+    if (!force && isProfileCompleteFor(latestMemoryRef.current)) {
+      return latestMemoryRef.current
+    }
+    try {
+      const freshMemory = await getGutoMemory()
+      latestMemoryRef.current = freshMemory
+      // Campos ausentes na resposta soberana também precisam limpar o cache
+      // local; o spread isolado não removeria uma missão antiga do React state.
+      onMemoryPatch?.({
+        ...freshMemory,
+        lastWorkoutPlan: freshMemory.lastWorkoutPlan,
+        weeklyWorkoutPlan: freshMemory.weeklyWorkoutPlan,
+      })
+      return freshMemory
+    } catch {
+      return latestMemoryRef.current
+    }
+  }, [isProfileCompleteFor, onMemoryPatch])
 
   useEffect(() => {
     if (!userId) return
@@ -572,30 +619,48 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
         setStatus("error")
         setErrorMsg(copy.timeoutError)
       }
-    }, 30_000)
+    }, 75_000)
 
     const run = async () => {
       setStatus("loading")
       setErrorMsg(null)
       try {
-        let fetched = await getDietPlan()
+        let fetched: DietPlan | null = null
+        try {
+          fetched = await getDietPlan()
+        } catch (error) {
+          const code = getDietPolicyCode(error)
+          const policyError = getDietPolicyError(error)
+          if (code !== "DIET_PROFILE_MISMATCH" && policyError !== "diet_language_mismatch") {
+            throw error
+          }
+          // Plano IA incompatível é tratado como ausente, mas a geração usa
+          // um snapshot novo do perfil em vez do cache desta aba.
+          fetched = null
+        }
         if (cancelled) return
 
-        if (fetched && isPlanStale(fetched.generatedAt)) fetched = null
+        if (fetched && isAdjustableDietPlan(fetched) && isPlanStale(fetched.generatedAt)) fetched = null
         // "Idioma é lei": uma dieta IA gerada noutro idioma não pode aparecer em
         // português num app italiano. Plano do coach/manual é preservado.
         if (fetched && isDietLanguageStale(fetched, validLang)) fetched = null
 
         if (!fetched) {
-          if (!isProfileCompleteFor(latestMemoryRef.current)) {
+          const profileForDiet = await loadFreshMemoryForDiet(true)
+          if (cancelled) return
+          if (!isProfileCompleteFor(profileForDiet)) {
             setPlan(null)
             setStatus("error")
             setErrorMsg(null)
             return
           }
-          setStatus("generating")
-          fetched = await generateDietPlan(validLang)
-          if (cancelled) return
+          // Opening this tab is read-only. The official post-pact transaction
+          // must already have persisted the diet; generating here would hide a
+          // broken onboarding flow. Manual retry remains available below.
+          setPlan(null)
+          setStatus("error")
+          setErrorMsg(null)
+          return
         }
 
         setPlan(sanitizeDietPlan(fetched, latestMemoryRef.current))
@@ -617,7 +682,7 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
       cancelled = true
       clearTimeout(hardTimeout)
     }
-  }, [userId, validLang, dietProfileKey, copy, isProfileCompleteFor, todayCoachDiet])
+  }, [userId, validLang, dietProfileKey, copy, isProfileCompleteFor, loadFreshMemoryForDiet, todayCoachDiet])
 
   const handleRetry = async () => {
     if (retrying) return
@@ -628,13 +693,14 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
     setRetrying(true)
     setErrorMsg(null)
     try {
-      if (!isProfileCompleteFor(latestMemoryRef.current)) {
+      const profileForDiet = await loadFreshMemoryForDiet(true)
+      if (!isProfileCompleteFor(profileForDiet)) {
         setPlan(null)
         setStatus("error")
         setErrorMsg(null)
         return
       }
-      const newPlan = await generateDietPlan(validLang)
+      const newPlan = await onGenerateDiet(validLang)
       setPlan(sanitizeDietPlan(newPlan, latestMemoryRef.current))
       setStatus("ready")
     } catch (err: unknown) {
@@ -683,7 +749,7 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
 
   // ── Empty / Error ─────────────────────────────────────────────────────────
   if (!plan) {
-    const profileComplete = isProfileComplete()
+    const profileComplete = isProfileCompleteFor(memory)
     const bodyText = !profileComplete ? copy.emptyBody : errorMsg || retryLabel[validLang]
 
     return (

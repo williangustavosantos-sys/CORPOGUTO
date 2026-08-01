@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test'
+import { test, expect, Page, Route } from '@playwright/test'
 import path from 'path'
 import fs from 'fs'
 
@@ -111,6 +111,16 @@ const mockMemory = {
   },
 }
 
+type MockMemoryWithOptionalArtifacts = Omit<typeof mockMemory, 'lastWorkoutPlan'> & {
+  lastWorkoutPlan?: typeof mockMemory.lastWorkoutPlan
+  weeklyWorkoutPlan?: unknown
+  weeklyDietPlan?: unknown
+  dietGenerationStatus: string
+  hasSeenChatOpening: boolean
+  proactiveMemories?: unknown[]
+  proactiveImpacts?: unknown[]
+}
+
 const mockDiet = {
   userId: TEST_USER_ID,
   title: 'Dieta da Semana — Hipertrofia',
@@ -164,6 +174,39 @@ const jsonBody = (body: unknown) => ({
   body: JSON.stringify(body),
 })
 
+function correlatedGutoBody(route: Route, body: Record<string, unknown>) {
+  const request = route.request().postDataJSON() as {
+    turnId?: string
+    requestId?: string
+    contextId?: string | null
+    contextVersion?: number | null
+    activeContextType?: 'workout' | 'diet' | null
+    activeItemId?: string | null
+  }
+  return jsonBody({
+    ...body,
+    turnId: request.turnId,
+    requestId: request.requestId,
+    contextId: request.contextId ?? null,
+    contextVersion: request.contextVersion ?? null,
+    activeContextType: request.activeContextType ?? null,
+    activeItemId: request.activeItemId ?? null,
+  })
+}
+
+function toDateKey(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function addDays(date: Date, amount: number) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + amount)
+  return next
+}
+
 async function setupApiMocks(page: Page) {
   // Casa pelo final do pathname (cobre `/auth/me` e `/api/guto/auth/me`).
   const onPath = (suffix: string, handler: Parameters<Page['route']>[1]) =>
@@ -197,7 +240,7 @@ async function setupApiMocks(page: Page) {
   // só intercepta POST e não engole /guto/memory, /guto/diet, etc.
   await onPath('/guto', (route) => {
     if (route.request().method() === 'POST') {
-      return route.fulfill(jsonBody({
+      return route.fulfill(correlatedGutoBody(route, {
         fala: 'Boa, QA! Treino montado e dieta calibrada. Bora, dupla!',
         acao: 'none',
         avatarEmotion: 'default',
@@ -407,6 +450,267 @@ test.describe('GUTO – Fluxos críticos', () => {
 
     const bodyText = await page.locator('body').innerText()
     expect(bodyText).not.toMatch(/Como posso te ajudar hoje/i)
+  })
+
+  test('10c — dieta persistida é visível sem depender de missão', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const newUserMemory: MockMemoryWithOptionalArtifacts = {
+      ...mockMemory,
+      totalXp: 100,
+      streak: 0,
+      initialXpRewardSeen: true,
+      hasSeenChatOpening: false,
+      lastWorkoutPlan: undefined,
+      weeklyWorkoutPlan: undefined,
+      weeklyDietPlan: undefined,
+      dietGenerationStatus: 'idle',
+      proactiveMemories: [],
+      proactiveImpacts: [],
+    }
+    let dietGenerateCalls = 0
+    let arrivalCalls = 0
+    let memoryGetCalls = 0
+    let dietGetCalls = 0
+
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) => {
+      memoryGetCalls += 1
+      return route.fulfill(jsonBody(newUserMemory))
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) => {
+      dietGetCalls += 1
+      // Contrato oficial: uma dieta válida não deixa de existir quando a missão
+      // está ausente ou sendo reidratada por outro caminho.
+      return route.fulfill(jsonBody(mockDiet))
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill(jsonBody(mockDiet))
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.includes('/guto/proactive'), (route) => {
+      arrivalCalls += 1
+      return route.fulfill(jsonBody({
+        due: true,
+        slot: 'arrival',
+        deliveryCommitted: false,
+        fala: 'QA, estou fechando tua primeira missão com o que você me passou.',
+        acao: 'updateWorkout',
+        expectedResponse: null,
+        avatarEmotion: 'default',
+        workoutPlan: mockMemory.lastWorkoutPlan,
+        memoryPatch: {
+          lastWorkoutPlan: mockMemory.lastWorkoutPlan,
+        },
+      }))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(/estou fechando tua primeira missão/i)).toBeVisible({ timeout: 10000 })
+    await page.waitForTimeout(1000)
+
+    expect(dietGenerateCalls).toBe(0)
+    expect(arrivalCalls).toBeGreaterThanOrEqual(1)
+
+    const arrivalCallsBeforeReload = arrivalCalls
+    await page.reload()
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await expect.poll(() => arrivalCalls, { timeout: 10000 }).toBeGreaterThan(arrivalCallsBeforeReload)
+
+    await page.getByRole('button', { name: 'MISSÃO' }).click()
+    await expect(page.getByText(/Supino Reto com Barra/i)).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+    expect(memoryGetCalls).toBeGreaterThan(0)
+    expect(dietGetCalls).toBeGreaterThan(0)
+  })
+
+  test('10d — chegada aplica missão persistida sem disparar geração de dieta no cliente', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const newUserMemory: MockMemoryWithOptionalArtifacts = {
+      ...mockMemory,
+      totalXp: 100,
+      streak: 0,
+      hasSeenChatOpening: false,
+      lastWorkoutPlan: undefined,
+      weeklyWorkoutPlan: undefined,
+      weeklyDietPlan: undefined,
+      dietGenerationStatus: 'generated',
+    }
+    let dietGenerateCalls = 0
+
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody(newUserMemory))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
+      route.fulfill(jsonBody(mockDiet))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill(jsonBody(mockDiet))
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.includes('/guto/proactive'), (route) => {
+      if (newUserMemory.hasSeenChatOpening) {
+        return route.fulfill(jsonBody({ due: false }))
+      }
+
+      newUserMemory.hasSeenChatOpening = true
+      newUserMemory.lastWorkoutPlan = mockMemory.lastWorkoutPlan
+      return route.fulfill(jsonBody({
+        due: true,
+        slot: 'arrival',
+        deliveryCommitted: true,
+        fala: 'Finalmente, QA. Tua primeira missão está pronta. Bora?',
+        acao: 'updateWorkout',
+        expectedResponse: null,
+        workoutPlan: mockMemory.lastWorkoutPlan,
+        memoryPatch: {
+          lastWorkoutPlan: mockMemory.lastWorkoutPlan,
+        },
+      }))
+    })
+
+    await page.goto('/')
+    await expect(page.getByText(/tua primeira missão está pronta/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+
+    await page.getByRole('button', { name: 'MISSÃO' }).click()
+    await expect(page.getByText(/Supino Reto com Barra/i)).toBeVisible({ timeout: 10000 })
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+  })
+
+  test('10e — aba não mascara bootstrap incompleto com geração automática', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const orphanGeneratingMemory = {
+      ...mockMemory,
+      dietGenerationStatus: 'generating',
+    }
+    let dietGenerateCalls = 0
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody(orphanGeneratingMemory))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
+      route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'diet_not_found' }) })
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill(jsonBody(mockDiet))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    await expect(page.getByRole('button', { name: 'REGENERAR DIETA' })).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+  })
+
+  test('10f — ausência de dieta permanece independente do treino', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const memoryWithoutMission = {
+      ...mockMemory,
+      lastWorkoutPlan: undefined,
+      weeklyWorkoutPlan: undefined,
+      dietGenerationStatus: 'idle',
+    }
+    let dietGenerateCalls = 0
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody(memoryWithoutMission))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
+      route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'diet_not_found' }) })
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill(jsonBody(mockDiet))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    await expect(page.getByRole('button', { name: 'REGENERAR DIETA' })).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+  })
+
+  test('10g — retry gera dieta mesmo quando não existe missão', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const memoryWithoutMission = {
+      ...mockMemory,
+      lastWorkoutPlan: undefined,
+      weeklyWorkoutPlan: undefined,
+      dietGenerationStatus: 'idle',
+    }
+    let dietGenerateCalls = 0
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody(memoryWithoutMission))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'temporary_failure' }) })
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill(jsonBody(mockDiet))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    const retryButton = page.getByRole('button', { name: 'REGENERAR DIETA' })
+    await expect(retryButton).toBeVisible({ timeout: 10000 })
+    await retryButton.click()
+    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(1)
+  })
+
+  test('10h — dieta soberana antiga do coach continua visível e não regenera', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const oldCoachDiet = {
+      ...mockDiet,
+      generatedAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
+      lockedByCoach: true,
+      source: 'coach_manual',
+    }
+    let dietGenerateCalls = 0
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet'), (route) =>
+      route.fulfill(jsonBody(oldCoachDiet))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/diet/generate'), (route) => {
+      dietGenerateCalls += 1
+      return route.fulfill(jsonBody(mockDiet))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'DIETA' }).click()
+    await expect(page.getByText(/Café da manhã/i)).toBeVisible({ timeout: 10000 })
+    expect(dietGenerateCalls).toBe(0)
+  })
+
+  test('10i — card interno do chat mostra apenas GUTO, sem duplicar a dupla', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.goto('/')
+
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    const presenceLabel = page.getByTestId('guto-chat-presence-label')
+    await expect(presenceLabel).toBeVisible({ timeout: 8000 })
+    await expect(presenceLabel).toHaveText('GUTO')
+    await expect(presenceLabel).not.toContainText(/GUTO\s*&/i)
   })
 
   // ── 11. Enviar mensagem no chat ────────────────────────────────────────────
@@ -656,6 +960,431 @@ test.describe('GUTO – Fluxos críticos', () => {
     await expect(arenaContent).not.toBeEmpty()
 
     await snap(page, '20-arena-sem-crash')
+  })
+
+  test('21 — chat persiste histórico ao reabrir', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.goto('/')
+
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    const input = page.locator('input[type="text"]').first()
+    await expect(input).toBeVisible({ timeout: 8000 })
+    await input.fill('GUTO, vou viajar sexta')
+    await input.press('Enter')
+
+    await expect(page.getByTestId('user-message').filter({ hasText: 'vou viajar sexta' })).toBeVisible({ timeout: 8000 })
+    await expect(page.getByTestId('guto-message').filter({ hasText: 'Boa, QA!' })).toBeVisible({ timeout: 10000 })
+
+    await page.reload()
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByTestId('user-message').filter({ hasText: 'vou viajar sexta' })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByTestId('guto-message').filter({ hasText: 'Boa, QA!' })).toBeVisible({ timeout: 10000 })
+
+    await snap(page, '21-chat-history-persisted')
+  })
+
+  test('22 — teclado mobile mantém histórico e input utilizáveis', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.goto('/')
+
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    const input = page.locator('input[type="text"]').first()
+    await expect(input).toBeVisible({ timeout: 8000 })
+
+    await input.focus()
+    await page.evaluate(() => {
+      const vv = window.visualViewport
+      if (!vv) return
+      const input = document.activeElement instanceof HTMLInputElement
+        ? document.activeElement
+        : (document.querySelector('input[type="text"]') as HTMLInputElement | null)
+      input?.focus()
+      input?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      const heightDesc = Object.getOwnPropertyDescriptor(window.visualViewport, 'height')
+      const offsetDesc = Object.getOwnPropertyDescriptor(window.visualViewport, 'offsetTop')
+      Object.defineProperty(window.visualViewport, 'height', {
+        configurable: true,
+        get: () => Math.max(320, (window.innerHeight ?? 800) - 360),
+      })
+      Object.defineProperty(window.visualViewport, 'offsetTop', { configurable: true, get: () => 0 })
+      const viewportHeight = Math.max(320, (window.innerHeight ?? 800) - 360)
+      document.documentElement.setAttribute('data-keyboard-open', '')
+      document.documentElement.style.setProperty('--guto-viewport-height', `${viewportHeight}px`)
+      document.documentElement.style.setProperty('--guto-keyboard-offset', `${Math.max(0, window.innerHeight - viewportHeight)}px`)
+      document.querySelectorAll('.sala-guto').forEach((el) => {
+        const shell = el as HTMLElement
+        shell.setAttribute('data-keyboard-open', '')
+        shell.style.setProperty('--guto-viewport-height', `${viewportHeight}px`)
+        shell.style.setProperty('--guto-keyboard-offset', `${Math.max(0, window.innerHeight - viewportHeight)}px`)
+      })
+      window.dispatchEvent(new FocusEvent('focusin'))
+      window.dispatchEvent(new Event('resize'))
+      vv.dispatchEvent(new Event('resize'))
+      ;(window as unknown as { __restoreVisualViewport?: () => void }).__restoreVisualViewport = () => {
+        if (heightDesc) Object.defineProperty(window.visualViewport, 'height', heightDesc)
+        if (offsetDesc) Object.defineProperty(window.visualViewport, 'offsetTop', offsetDesc)
+      }
+    })
+    await page.waitForTimeout(180)
+
+    await expect(page.locator('html')).toHaveAttribute('data-keyboard-open', '', { timeout: 2000 })
+
+    const listBox = await page.locator('.guto-chat-list').boundingBox()
+    const inputBox = await input.boundingBox()
+    expect(listBox).not.toBeNull()
+    expect(inputBox).not.toBeNull()
+    expect(listBox!.height).toBeGreaterThan(120)
+    const visualHeight = await page.evaluate(() => window.visualViewport?.height ?? window.innerHeight)
+    expect(inputBox!.y + inputBox!.height).toBeLessThanOrEqual(visualHeight + 12)
+
+    await page.evaluate(() => {
+      ;(window as unknown as { __restoreVisualViewport?: () => void }).__restoreVisualViewport?.()
+      document.documentElement.removeAttribute('data-keyboard-open')
+      document.querySelectorAll('.sala-guto').forEach((el) => {
+        const shell = el as HTMLElement
+        shell.removeAttribute('data-keyboard-open')
+        shell.style.removeProperty('--guto-viewport-height')
+        shell.style.removeProperty('--guto-keyboard-offset')
+      })
+      window.dispatchEvent(new Event('resize'))
+      window.visualViewport?.dispatchEvent(new Event('resize'))
+    })
+    await input.blur()
+
+    await snap(page, '22-chat-keyboard-mobile')
+  })
+
+  test('23 — Percurso agrega viagem e treino adaptado em um item do calendário', async ({ page }) => {
+    const travelDate = addDays(new Date(), 4)
+    const travelDateKey = toDateKey(travelDate)
+    const travelDay = String(travelDate.getDate()).padStart(2, '0')
+
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody({
+        ...mockMemory,
+        proactiveMemories: [
+          {
+            id: 'pm-trip-e2e',
+            userId: TEST_USER_ID,
+            type: 'trip',
+            status: 'confirmed',
+            rawText: 'vou viajar sexta',
+            understood: 'Viagem registrada',
+            dateText: 'sexta',
+            dateParsed: travelDateKey,
+            weekKey: 'e2e-week',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+        proactiveImpacts: [
+          {
+            id: 'pi-trip-e2e',
+            memoryId: 'pm-trip-e2e',
+            status: 'active',
+            surfaces: ['chat', 'workout', 'mission', 'path'],
+            priority: 80,
+            affectedDates: [travelDateKey],
+            workoutEffect: 'short_light',
+            missionEffect: 'reduced',
+            pushEffect: 'avoid_blind_charge',
+            xpEffect: 'no_free_xp_context_only',
+            arenaEffect: 'validation_required',
+            pathEffect: 'adapted_context',
+            evolutionEffect: 'adapted_context',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            decision: {
+              id: 'decision-trip-e2e',
+              memoryId: 'pm-trip-e2e',
+              kind: 'adapt_day',
+              reason: 'travel',
+              priority: 80,
+              affectedDates: [travelDateKey],
+              workoutEffect: 'short_light',
+              missionEffect: 'reduced',
+              message: 'Treino adaptado por causa da viagem.',
+              createdAt: new Date().toISOString(),
+            },
+          },
+        ],
+      }))
+    )
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'PERCURSO' }).click()
+    await expect(page.getByText('Memória visual')).toBeVisible({ timeout: 8000 })
+
+    await page.getByRole('button', { name: new RegExp(`${travelDay} Treino adaptado`) }).click()
+    await expect(page.getByText('Treino adaptado').first()).toBeVisible({ timeout: 8000 })
+    await expect(page.getByText('Viagem registrada')).toBeVisible({ timeout: 8000 })
+    await expect(page.getByRole('button', { name: 'ALTERAR' })).toBeVisible()
+
+    await snap(page, '23-path-travel-adapted')
+  })
+
+  test('24 — resposta rápida de viagem envia contexto operacional correto', async ({ page }) => {
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+
+    const seenInputs: string[] = []
+    const confirmPayloads: Array<{ memoryId?: string; trainingAdapted?: boolean }> = []
+    const travelDate = addDays(new Date(), 3)
+    const travelDateKey = toDateKey(travelDate)
+    const travelDateLabel = new Intl.DateTimeFormat('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).format(travelDate)
+    let cardPending = false
+    const pendingTrip = {
+      id: 'pm-trip-card-e2e',
+      userId: TEST_USER_ID,
+      type: 'trip',
+      status: 'pending_confirmation',
+      stage: 'impact_confirmation',
+      confirmationStage: 'impact',
+      proposedTrainingAdapted: true,
+      rawText: 'viajo sexta; consigo treinar na viagem',
+      understood: 'Viagem com treino adaptado pendente',
+      dateText: 'sexta',
+      dateParsed: travelDateKey,
+      weekKey: 'e2e-week',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/memories'), (route) =>
+      route.fulfill(jsonBody({ memories: cardPending ? [pendingTrip] : [] }))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/confirm'), async (route) => {
+      confirmPayloads.push(route.request().postDataJSON() as { memoryId?: string; trainingAdapted?: boolean })
+      cardPending = false
+      return route.fulfill(jsonBody({
+        ok: true,
+        memory: { ...pendingTrip, status: 'confirmed', stage: 'confirmed_adapted', trainingAdapted: true },
+        fala: 'Fechado. Salvei tua viagem. Agora vamos cuidar de hoje.',
+        memoryPatch: {
+          proactiveMemories: [{ ...pendingTrip, status: 'confirmed', stage: 'confirmed_adapted', trainingAdapted: true }],
+          proactiveImpacts: [{ memoryId: pendingTrip.id, status: 'active', workoutEffect: 'short_light' }],
+        },
+      }))
+    })
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto'), async (route) => {
+      if (route.request().method() !== 'POST') return route.continue()
+      const body = route.request().postDataJSON() as { input?: string }
+      seenInputs.push(body.input || '')
+      if (seenInputs.length === 1) {
+        return route.fulfill(correlatedGutoBody(route, {
+          fala: 'Consigo adaptar para 20-30 minutos. Você consegue treinar?',
+          acao: 'none',
+          avatarEmotion: 'alert',
+          expectedResponse: {
+            type: 'text',
+            context: 'travel_training',
+            options: ['SIM', 'NÃO'],
+            instruction: 'Responder se consegue treinar na viagem ou se o dia precisa ser protegido.',
+          },
+        }))
+      }
+      cardPending = true
+      return route.fulfill(correlatedGutoBody(route, {
+        fala: 'Confirma no card e eu já sigo organizando tua semana.',
+        acao: 'none',
+        avatarEmotion: 'default',
+        expectedResponse: null,
+        memoryPatch: {
+          proactiveMemories: [pendingTrip],
+          proactiveImpacts: [],
+          activeConversationContext: {
+            kind: 'travel_impact_confirmation',
+            source: 'state_resolver',
+            relatedMemoryId: pendingTrip.id,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      }))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    const input = page.locator('input[type="text"]').first()
+    await expect(input).toBeVisible({ timeout: 8000 })
+    await input.fill('viajo sexta')
+    await input.press('Enter')
+
+    await expect(page.getByRole('button', { name: 'SIM' })).toBeVisible({ timeout: 10000 })
+    await page.getByRole('button', { name: 'SIM' }).click()
+    await expect(page.getByText('Viagem', { exact: true })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(travelDateLabel, { exact: true })).toBeVisible()
+    const tripCardQuestion = page.getByText(`Confirmar viagem em ${travelDateLabel} com treino adaptado?`)
+    await expect(tripCardQuestion).toBeVisible()
+    await expect(page.getByRole('button', { name: 'ALTERAR DATA' })).toBeVisible()
+
+    const cardBeforeConfirmation = await tripCardQuestion.locator('..').innerText()
+    expect(cardBeforeConfirmation).not.toMatch(/workflow|pending|memory|status|impacto/i)
+
+    await page.reload()
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(`Confirmar viagem em ${travelDateLabel} com treino adaptado?`)).toBeVisible({ timeout: 10000 })
+
+    await page.getByRole('button', { name: 'CONFIRMAR' }).click()
+    await expect(page.getByText('Fechado. Salvei tua viagem. Agora vamos cuidar de hoje.')).toBeVisible({ timeout: 10000 })
+
+    await expect.poll(() => seenInputs.length).toBeGreaterThanOrEqual(2)
+    expect(seenInputs[1]).toContain('consigo treinar na viagem')
+    await expect.poll(() => confirmPayloads.length).toBe(1)
+    expect(confirmPayloads[0]).toEqual({ memoryId: pendingTrip.id, trainingAdapted: true })
+
+    await snap(page, '24-travel-quick-reply')
+  })
+
+  // ── 25. Card de decisão bloqueia o chat + alterar data inline não volta pro chat ──
+  // Cobre explicitamente o contrato do card-triad:
+  //  (a) enquanto há card pendente, input de texto / mic / enviar / quick replies somem;
+  //  (b) "ALTERAR DATA" abre edição inline sem sair do card e SALVAR mantém o card (não navega pro chat).
+  test('25 — card de decisão bloqueia input/mic/quick replies e alterar data não volta pro chat', async ({ page }) => {
+    const tripDateKey = toDateKey(addDays(new Date(), 5))
+    const pendingTrip = {
+      id: 'pm-block-e2e',
+      userId: TEST_USER_ID,
+      type: 'trip',
+      status: 'pending_confirmation',
+      stage: 'impact_confirmation',
+      confirmationStage: 'impact',
+      proposedTrainingAdapted: true,
+      rawText: 'viajo na próxima semana',
+      understood: 'Viagem pendente de confirmação',
+      dateText: 'próxima semana',
+      dateParsed: tripDateKey,
+      weekKey: 'e2e-week',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    // memory já chega com card pendente → o chat deve nascer bloqueado
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody({ ...mockMemory, proactiveMemories: [pendingTrip] }))
+    )
+    // refresh (no load e após salvar) mantém o card pendente
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/memories'), (route) =>
+      route.fulfill(jsonBody({ memories: [pendingTrip] }))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/update'), (route) =>
+      route.fulfill(jsonBody({ ok: true, memory: pendingTrip }))
+    )
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    // (a) chat bloqueado: bloco do card presente; input de texto, mic e enviar ausentes
+    const cardBlock = page.getByTestId('guto-chat-card-block')
+    await expect(cardBlock).toBeVisible({ timeout: 10000 })
+    await expect(cardBlock).toContainText(/Confirma o card/i)
+    await expect(page.locator('input[type="text"]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Microfone' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Enviar mensagem' })).toHaveCount(0)
+    // quick replies não aparecem enquanto o card bloqueia
+    await expect(page.getByRole('button', { name: 'SIM' })).toHaveCount(0)
+
+    await snap(page, '25a-card-blocks-chat')
+
+    // (b) alterar data inline — abre no próprio card, sem voltar pro chat
+    await page.getByRole('button', { name: 'ALTERAR DATA' }).click()
+    const dateInput = page.locator('input[type="date"]')
+    await expect(dateInput).toBeVisible({ timeout: 5000 })
+    // segue bloqueado: ainda sem input de texto e card-block presente
+    await expect(cardBlock).toBeVisible()
+    await expect(page.locator('input[type="text"]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'SALVAR DATA' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'VOLTAR' })).toBeVisible()
+
+    await dateInput.fill(toDateKey(addDays(new Date(), 7)))
+    await page.getByRole('button', { name: 'SALVAR DATA' }).click()
+
+    // após salvar: continua no card (chat ainda bloqueado), não navegou pro chat
+    await expect(cardBlock).toBeVisible({ timeout: 8000 })
+    await expect(page.locator('input[type="text"]')).toHaveCount(0)
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible()
+
+    await snap(page, '25b-alterar-data-stays-on-card')
+  })
+
+  // ── 26. Card de CANCELAMENTO de viagem tem ações reais (não fica preso) ──────
+  // Falha real em produção: cancelar uma viagem ativa gerava um card sem botão,
+  // inerte, que não saía. Agora o card de cancelamento bloqueia o chat e oferece
+  // CONFIRMAR CANCELAMENTO / MANTER VIAGEM / ALTERAR DATA.
+  test('26 — card de cancelamento de viagem tem 3 ações e não fica preso', async ({ page }) => {
+    const tripDateKey = toDateKey(addDays(new Date(), 4))
+    const awaitingTrip = {
+      id: 'pm-cancel-e2e',
+      userId: TEST_USER_ID,
+      type: 'trip',
+      status: 'surfaced',
+      stage: 'confirmed_adapted',
+      confirmationStage: 'impact',
+      trainingAdapted: true,
+      rawText: 'viajo sexta',
+      understood: 'Viagem na sexta',
+      dateText: 'sexta',
+      dateParsed: tripDateKey,
+      weekKey: 'e2e-week',
+      discardRequestedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    let discardCalledWith: string | null = null
+    await injectAuthStorage(page)
+    await setupApiMocks(page)
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/memory'), (route) =>
+      route.fulfill(jsonBody({ ...mockMemory, proactiveMemories: [awaitingTrip] }))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/memories'), (route) =>
+      route.fulfill(jsonBody({ memories: discardCalledWith ? [] : [awaitingTrip] }))
+    )
+    await page.route((url) => isApiCall(url) && url.pathname.endsWith('/guto/proactivity/discard'), (route) => {
+      discardCalledWith = (route.request().postDataJSON() as { memoryId?: string })?.memoryId ?? null
+      return route.fulfill(jsonBody({
+        ok: true,
+        fala: 'Fechado. Cancelei essa viagem e a gente volta ao plano normal.',
+        memoryPatch: { proactiveMemories: [{ ...awaitingTrip, status: 'discarded' }], proactiveImpacts: [] },
+      }))
+    })
+
+    await page.goto('/')
+    await expect(page.locator('nav[aria-label="Navegação principal"]')).toBeVisible({ timeout: 15000 })
+
+    // (a) card de cancelamento bloqueia o chat (é a próxima ação) — não fica inerte
+    const cardBlock = page.getByTestId('guto-chat-card-block')
+    await expect(cardBlock).toBeVisible({ timeout: 10000 })
+    await expect(page.locator('input[type="text"]')).toHaveCount(0)
+
+    // (b) tem as 3 ações reais
+    await expect(page.getByRole('button', { name: 'CONFIRMAR CANCELAMENTO' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'MANTER VIAGEM' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'ALTERAR DATA' })).toBeVisible()
+    await expect(page.getByText(/Cancelar a viagem de/i)).toBeVisible()
+    // não vaza texto interno cru
+    await expect(page.getByText(/VIAGEM INFORMADA|understood|rawText/i)).toHaveCount(0)
+
+    await snap(page, '26a-cancel-card-actions')
+
+    // (c) confirmar cancelamento chama o discard e libera o chat
+    await page.getByRole('button', { name: 'CONFIRMAR CANCELAMENTO' }).click()
+    await expect.poll(() => discardCalledWith).toBe('pm-cancel-e2e')
+    await expect(page.locator('input[type="text"]').first()).toBeVisible({ timeout: 8000 })
+    await expect(page.getByTestId('guto-chat-card-block')).toHaveCount(0)
+
+    await snap(page, '26b-cancel-confirmed-chat-freed')
   })
 
 })
