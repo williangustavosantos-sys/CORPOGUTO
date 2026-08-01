@@ -35,6 +35,20 @@ describe("guto proactivity UI", () => {
     assert.equal(actionable.pendingConfirmation[0]?.type, "trip")
   })
 
+  it("mostra card para viagem recem detectada antes da etapa de impacto", () => {
+    const actionable = getActionableProactiveMemories([
+      tripMemory({
+        stage: "continuity_question",
+        confirmationStage: "event",
+        understood: "Viagem informada: viajo amanhã",
+      }),
+    ])
+
+    assert.equal(actionable.pendingConfirmation.length, 1)
+    assert.equal(actionable.pendingConfirmation[0]?.stage, "continuity_question")
+    assert.equal(actionable.pendingConfirmation[0]?.confirmationStage, "event")
+  })
+
   it("usa copy de decisao visual para viagem detectada", () => {
     const copy = getProactiveMemoryUiCopy("pt-BR")
 
@@ -44,6 +58,27 @@ describe("guto proactivity UI", () => {
     assert.equal(copy.btnFix, "ALTERAR DATA")
     assert.equal(copy.btnCancel, "CANCELAR")
     assert.equal(formatProactiveMemoryLabel(tripMemory()), "Viagem provável em 2026-06-19 (19/06/2026)")
+  })
+
+  it("nao vaza instrucao interna no titulo do card proativo", () => {
+    const leakedInstruction =
+      "Evento proativo devido: arrival. Decida a fala e a próxima ação. Não use culpa por streak nem template de agenda."
+    const memory = tripMemory({
+      type: "commitment",
+      rawText: leakedInstruction,
+      understood: `Compromisso informado: ${leakedInstruction}`,
+      dateText: undefined,
+      dateParsed: undefined,
+    })
+    const label = formatProactiveMemoryLabel(memory)
+    const cardTitle = getProactiveMemoryUiCopy("pt-BR").pendingConfirm(label)
+
+    assert.equal(label, "Compromisso")
+    assert.equal(cardTitle, "Compromisso")
+    assert.doesNotMatch(
+      cardTitle,
+      /Confirmar:|Compromisso informado|Evento proativo|Decida a fala|streak|template de agenda/i
+    )
   })
 
   it("deduplica cards iguais e mostra só um contexto principal", () => {

@@ -46,6 +46,16 @@ describe("Fase 3 — BUG 1: sanitizeDietPlan confia no backend para calorias", (
     assert.equal(sanitizeDietPlan(plan, memory), plan)
   })
 
+  it("aceita alimento vegetal explicitamente sem lactose", () => {
+    const plan = buildPlan({
+      foodRestrictions: "vegetariano, sem lactose",
+      meals: [meal("lanche2", "Lanche", [food("Iogurte de soja sem lactose", 150), food("Granola", 160)])],
+    } as Partial<DietPlan>)
+    const memory = { foodRestrictions: "vegetariano, sem lactose" } as unknown as GutoMemory
+
+    assert.equal(sanitizeDietPlan(plan, memory), plan)
+  })
+
   it("AINDA bloqueia (segurança real) quando o plano viola a restrição alimentar declarada", () => {
     const plan = buildPlan({
       foodRestrictions: "lactose",

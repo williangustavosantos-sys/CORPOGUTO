@@ -285,17 +285,18 @@ function planViolatesDietLimits(plan: DietPlan, memory: GutoMemory): boolean {
   const limits = getDietLimits(memory)
   if (!limits.dairy && !limits.vegan && !limits.vegetarian && !limits.gluten) return false
 
-  const text = plan.meals
+  const foodNames = plan.meals
     .flatMap((meal) => meal.foods.map((food) => food.name))
-    .join(" ")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
+    .map((name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase())
 
-  const hasDairy = /\b(iogurte|yogurt|yoghurt|parmes|queijo|cheese|milk|leite|latte|formagg|dairy)\b/i.test(text)
-  const hasMeat = /\b(frango|chicken|pollo)\b/i.test(text)
-  const hasEggs = /\b(ovo|ovos|egg|eggs|uova)\b/i.test(text)
-  const hasGluten = /\b(macarrao|pasta|aveia|oats|gluten)\b/i.test(text)
+  const lactoseSafeQualifier = /\b(sem\s+lactose|zero\s+lactose|lactose\s*free|de\s+soja|soja|vegetal|vegano|vegana|vegan|plant.?based)\b/i
+  const hasDairy = foodNames.some((name) =>
+    /\b(iogurte|yogurt|yoghurt|parmes|queijo|cheese|milk|leite|latte|formagg|dairy)\b/i.test(name) &&
+    !lactoseSafeQualifier.test(name)
+  )
+  const hasMeat = foodNames.some((name) => /\b(frango|chicken|pollo)\b/i.test(name))
+  const hasEggs = foodNames.some((name) => /\b(ovo|ovos|egg|eggs|uova)\b/i.test(name))
+  const hasGluten = foodNames.some((name) => /\b(macarrao|pasta|aveia|oats|gluten)\b/i.test(name))
 
   if (limits.vegan && (hasDairy || hasMeat || hasEggs)) return true
   if (limits.vegetarian && hasMeat) return true

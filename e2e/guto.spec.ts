@@ -17,6 +17,7 @@ async function snap(page: Page, name: string) {
 
 const TEST_USER_ID = 'qa-test-user-001'
 const TEST_TOKEN = 'qa-fake-token-playwright'
+const CURRENT_STORAGE_VERSION = 3
 // API URL from .env.local (NEXT_PUBLIC_API_URL)
 const API_BASE = 'https://cerebroguto.onrender.com'
 
@@ -239,7 +240,7 @@ async function injectAuthStorage(page: Page) {
     {
       token: TEST_TOKEN,
       userId: TEST_USER_ID,
-      storageVersion: 2,
+      storageVersion: CURRENT_STORAGE_VERSION,
       profile: {
         language: 'pt-BR',
         userName: 'QA',

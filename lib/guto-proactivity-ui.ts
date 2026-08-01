@@ -23,7 +23,7 @@ export type ProactiveMemoryUiCopy = {
 
 const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
   "pt-BR": {
-    pendingConfirm: (label) => `Confirmar: ${label}`,
+    pendingConfirm: (label) => label,
     pendingTrip: "VIAGEM",
     pendingTripImpact: "VIAGEM",
     pendingValidate: (label) => `Validar: ${label}`,
@@ -48,7 +48,7 @@ const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
     btnKeepDate: "VOLTAR",
   },
   "en-US": {
-    pendingConfirm: (label) => `Confirm: ${label}`,
+    pendingConfirm: (label) => label,
     pendingTrip: "TRAVEL",
     pendingTripImpact: "TRAVEL",
     pendingValidate: (label) => `Validate: ${label}`,
@@ -73,7 +73,7 @@ const copyByLang: Record<SupportedLanguage, ProactiveMemoryUiCopy> = {
     btnKeepDate: "BACK",
   },
   "it-IT": {
-    pendingConfirm: (label) => `Conferma: ${label}`,
+    pendingConfirm: (label) => label,
     pendingTrip: "VIAGGIO",
     pendingTripImpact: "VIAGGIO",
     pendingValidate: (label) => `Valida: ${label}`,
@@ -128,7 +128,23 @@ export function formatProactiveWeekday(memory: ProactiveMemory, language: Suppor
 }
 
 export function formatProactiveMemoryLabel(memory: ProactiveMemory): string {
-  const base = memory.understood?.trim() || memory.rawText?.trim() || memory.type
+  const fallbackByType: Record<ProactiveMemory["type"], string> = {
+    trip: "Viagem",
+    commitment: "Compromisso",
+    schedule: "Agenda",
+    health: "Saúde",
+    other: "Contexto",
+  }
+  const rawBase = memory.understood?.trim() || memory.rawText?.trim() || fallbackByType[memory.type] || memory.type
+  const base = rawBase
+    .replace(/^confirmar:\s*/i, "")
+    .replace(/^compromisso informado:\s*.*$/i, "Compromisso")
+    .replace(/^viagem informada:\s*.*$/i, "Viagem")
+    .replace(/^contexto informado:\s*.*$/i, fallbackByType[memory.type] || "Contexto")
+    .replace(/\bEvento proativo devido:[^.\n]*\.?/gi, "")
+    .replace(/\bDecida a fala e a próxima ação[^.\n]*\.?/gi, "")
+    .replace(/\bNão use culpa por streak[^.\n]*\.?/gi, "")
+    .trim() || fallbackByType[memory.type] || memory.type
   const absoluteDate = memory.dateParsed ? formatProactiveDate(memory, "pt-BR") : null
   if (absoluteDate) return `${base} (${absoluteDate})`
   if (memory.dateText?.trim()) return `${base} (${memory.dateText.trim()})`
@@ -171,7 +187,14 @@ export function getActionableProactiveMemories(
     memories.filter((item) => {
       if (item.status !== "pending_confirmation") return false
       if (item.type !== "trip") return true
-      return item.stage === "impact_confirmation" || (!item.stage && item.confirmationStage === "impact")
+      return (
+        item.stage === "impact_confirmation" ||
+        item.stage === "event_confirmation" ||
+        item.stage === "continuity_question" ||
+        item.confirmationStage === "impact" ||
+        item.confirmationStage === "event" ||
+        !item.stage
+      )
     })
   )
   const pendingValidation = dedupeProactiveMemories(

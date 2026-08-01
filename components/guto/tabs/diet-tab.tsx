@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { Apple, ChevronDown, ChevronUp, ClipboardList, Coffee, Droplets, Flame, Moon, RefreshCw, Salad, Utensils, Wheat, Zap, type LucideIcon } from "lucide-react"
 
-import { getDietPlan, generateDietPlan, type DietPlan, type DietMeal, type DietFood } from "@/lib/api/guto"
+import { getDietPlan, generateDietPlan, getGutoMemory, type DietPlan, type DietMeal, type DietFood, type GutoMemory } from "@/lib/api/guto"
 import { ApiError } from "@/lib/api/client"
 import { DietPlanValidationError, sanitizeDietPlan } from "@/lib/diet-plan"
 import { getLanguage } from "../translations"
@@ -163,7 +163,8 @@ interface DietTabProps {
   userId: string
   language: string
   onFoodDoubt: (food: DietFood, meal: DietMeal) => void
-  memory: import("@/lib/api/guto").GutoMemory | null
+  memory: GutoMemory | null
+  onMemoryPatch?: (patch: Partial<GutoMemory>) => void
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -490,7 +491,7 @@ function CoachDietView({ coachDiet, copy }: { coachDiet: CoachDietDay; copy: Coa
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps) {
+export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }: DietTabProps) {
   const validLang = getLanguage(language)
   const copy = dietCopy[validLang]
 
@@ -554,8 +555,20 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
   }, [])
 
   function isProfileComplete(): boolean {
-    return isProfileCompleteFor(memory)
+    return isProfileCompleteFor(latestMemoryRef.current)
   }
+
+  const loadFreshMemoryIfIncomplete = useCallback(async () => {
+    if (isProfileCompleteFor(latestMemoryRef.current)) return latestMemoryRef.current
+    try {
+      const freshMemory = await getGutoMemory()
+      latestMemoryRef.current = freshMemory
+      onMemoryPatch?.(freshMemory)
+      return freshMemory
+    } catch {
+      return latestMemoryRef.current
+    }
+  }, [isProfileCompleteFor, onMemoryPatch])
 
   useEffect(() => {
     if (!userId) return
@@ -587,7 +600,9 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
         if (fetched && isDietLanguageStale(fetched, validLang)) fetched = null
 
         if (!fetched) {
-          if (!isProfileCompleteFor(latestMemoryRef.current)) {
+          const profileForDiet = await loadFreshMemoryIfIncomplete()
+          if (cancelled) return
+          if (!isProfileCompleteFor(profileForDiet)) {
             setPlan(null)
             setStatus("error")
             setErrorMsg(null)
@@ -617,7 +632,7 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
       cancelled = true
       clearTimeout(hardTimeout)
     }
-  }, [userId, validLang, dietProfileKey, copy, isProfileCompleteFor, todayCoachDiet])
+  }, [userId, validLang, dietProfileKey, copy, isProfileCompleteFor, loadFreshMemoryIfIncomplete, todayCoachDiet])
 
   const handleRetry = async () => {
     if (retrying) return
@@ -628,7 +643,8 @@ export function DietTab({ userId, language, onFoodDoubt, memory }: DietTabProps)
     setRetrying(true)
     setErrorMsg(null)
     try {
-      if (!isProfileCompleteFor(latestMemoryRef.current)) {
+      const profileForDiet = await loadFreshMemoryIfIncomplete()
+      if (!isProfileCompleteFor(profileForDiet)) {
         setPlan(null)
         setStatus("error")
         setErrorMsg(null)
