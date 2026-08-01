@@ -69,8 +69,8 @@ const evolutionCopy = {
   },
 } as const
 
-function getFirstName(value: string) {
-  return value.trim().split(/\s+/)[0] || ""
+function getFirstName(value?: string) {
+  return (value || "").trim().split(/\s+/)[0] || ""
 }
 
 export function EvolutionsTab({ userName, language, currentEvolution, memory }: EvolutionsTabProps) {

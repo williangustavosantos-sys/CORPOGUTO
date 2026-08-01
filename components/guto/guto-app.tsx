@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { AnimatePresence, motion } from "framer-motion"
@@ -708,6 +708,41 @@ function resolveAuthenticatedStage(
   }
 
   return "pact"
+}
+
+class TabErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  componentDidCatch(error: Error) {
+    console.error("[GUTO_TAB_ERROR]", error)
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex h-full min-h-0 flex-col items-center justify-center p-4 text-center">
+          <div className="guto-premium-card max-w-[20rem] p-6">
+            <h2 className="text-base font-black uppercase text-(--guto-navy)">GUTO reconectando</h2>
+            <p className="mt-2 text-xs font-semibold text-[rgba(13,35,65,0.7)]">
+              Ocorreu um ajuste temporário de dados nesta tela.
+            </p>
+            <button
+              type="button"
+              onClick={() => this.setState({ hasError: false })}
+              className="guto-cta-primary mt-4 w-full"
+            >
+              Recarregar tela
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 export function GutoApp({
@@ -2860,7 +2895,7 @@ export function GutoApp({
                 className={activeTab === "guto" ? "min-h-0 flex-1" : "pointer-events-none absolute inset-0 opacity-0"}
                 aria-hidden={activeTab !== "guto"}
               >
-                {chatContent}
+                <TabErrorBoundary>{chatContent}</TabErrorBoundary>
               </div>
               {activeTab !== "guto" && (
                 <div className="mx-4 mb-(--guto-bottom-nav-space) mt-[max(env(safe-area-inset-top),1.1rem)] flex min-h-0 flex-1 flex-col">
@@ -2875,7 +2910,7 @@ export function GutoApp({
                         exit={{ opacity: 0, y: -10 }}
                         transition={{ duration: 0.24 }}
                       >
-                        {tabContent}
+                        <TabErrorBoundary>{tabContent}</TabErrorBoundary>
                       </motion.div>
                     </AnimatePresence>
                   </div>

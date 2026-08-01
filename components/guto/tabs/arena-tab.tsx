@@ -73,9 +73,10 @@ function RankingCard({
   const stageName = avatarStageLabel[item.avatarStage]?.[language] ?? item.avatarStage.toUpperCase()
   const translatedStatus = translateArenaStatus(item.status, language)
   const isOnFire = item.status === "arena.status.on_fire" || item.status === "EM CHAMAS" || item.status === "ON FIRE"
-  const rawName = item.pairName.toUpperCase().startsWith("GUTO & ")
-    ? item.pairName.slice(7).trim()
-    : item.pairName
+  const pairName = item.pairName || ""
+  const rawName = pairName.toUpperCase().startsWith("GUTO & ")
+    ? pairName.slice(7).trim()
+    : pairName
   const isGenericName = /^operador\s*#?\d*$/i.test(rawName || "") || /^operator\s*#?\d*$/i.test(rawName || "")
   const displayName = item.userId === currentUserId && currentUserName && isGenericName
     ? currentUserName
