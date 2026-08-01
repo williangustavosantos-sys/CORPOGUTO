@@ -329,6 +329,7 @@ export interface GutoMemory {
   proactiveSent: Record<string, string[]>
   initialXpRewardSeen: boolean
   hasSeenChatOpening?: boolean
+  recentChatHistory?: Array<{ id: string; text: string; isGuto: boolean; timestamp: string }>
   validationHistory?: WorkoutValidationRecord[]
   workoutFeedbackHistory?: WorkoutFeedbackRecord[]
   // Classificação semântica dos 3 campos livres (país/patologia/restrição) feita
