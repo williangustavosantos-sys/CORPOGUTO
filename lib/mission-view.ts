@@ -25,24 +25,25 @@ export function formatRepsLabel(reps: number | string): string {
 }
 
 export function buildCompactRows(
-  exercises: MissionExercise[],
-  completedExerciseIds: string[],
+  exercises: MissionExercise[] | null | undefined,
+  completedExerciseIds: string[] | null | undefined,
   trainedToday: boolean
 ): { warmup: CompactExerciseRow[]; main: CompactExerciseRow[] } {
-  const doneIds = new Set(completedExerciseIds)
+  const safeExercises = Array.isArray(exercises) ? exercises.filter((e): e is MissionExercise => Boolean(e && typeof e === "object")) : []
+  const doneIds = new Set(Array.isArray(completedExerciseIds) ? completedExerciseIds : [])
   let order = 0
   const toRow = (exercise: MissionExercise): CompactExerciseRow => ({
-    id: exercise.id,
+    id: exercise.id || `ex-${order}`,
     order: ++order,
-    name: exercise.name,
-    muscleGroup: exercise.muscleGroup,
-    sets: exercise.sets,
-    repsLabel: formatRepsLabel(exercise.reps),
-    rest: exercise.rest,
-    done: trainedToday || doneIds.has(exercise.id),
+    name: exercise.name || "Exercício",
+    muscleGroup: exercise.muscleGroup || "principal",
+    sets: typeof exercise.sets === "number" ? exercise.sets : 3,
+    repsLabel: formatRepsLabel(exercise.reps || "10-12"),
+    rest: exercise.rest || "60s",
+    done: trainedToday || (exercise.id ? doneIds.has(exercise.id) : false),
   })
   return {
-    warmup: exercises.filter((e) => e.muscleGroup === "aquecimento").map(toRow),
-    main: exercises.filter((e) => e.muscleGroup !== "aquecimento").map(toRow),
+    warmup: safeExercises.filter((e) => e.muscleGroup === "aquecimento").map(toRow),
+    main: safeExercises.filter((e) => e.muscleGroup !== "aquecimento").map(toRow),
   }
 }

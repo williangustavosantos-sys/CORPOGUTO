@@ -36,6 +36,42 @@ export interface WorkoutFeedbackRecord {
   exerciseIds: string[]
 }
 export type GutoAvatarEmotion = "default" | "alert" | "critical" | "reward"
+
+export type ActiveContextType = "workout" | "diet"
+
+export interface ActiveContextItem {
+  id: string
+  name: string
+  mealId?: string
+  mealName?: string
+  quantity?: string
+  nutritionalRole?: string
+  workoutId?: string
+  position?: number
+  sets?: number
+  reps?: string
+  rest?: string
+}
+
+export interface ActiveContext {
+  id: string
+  version: number
+  type: ActiveContextType
+  sourceSurface: "workout" | "diet" | "chat"
+  originalItem: ActiveContextItem
+  currentItem: ActiveContextItem
+  lastSuggestedItem: ActiveContextItem | null
+  rejectedItems: ActiveContextItem[]
+  acceptedItem: ActiveContextItem | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface GutoLastSuggestedItem {
+  kind: "exercise" | "food"
+  id: string
+  name: string
+}
 export type GutoAction =
   | "none"
   | "updateWorkout"
@@ -240,6 +276,13 @@ export interface GutoAtomicTurnDecision {
 
 export interface SendGutoMessageResponse {
   turnId?: string
+  requestId?: string
+  contextId?: string
+  contextVersion?: number
+  activeContextType?: ActiveContextType
+  activeItemId?: string
+  activeContext?: ActiveContext | null
+  discardedReason?: string
   fala?: string
   acao?: GutoAction
   expectedResponse?: GutoExpectedResponse | null
@@ -259,6 +302,7 @@ export interface GutoNameValidation {
 export interface GutoMemory {
   userId: string
   name: string
+  sovereignNameConfirmedAt?: string
   language: SupportedLanguage
   initialXpGranted: boolean
   totalXp: number
@@ -300,6 +344,7 @@ export interface GutoMemory {
   }[]
   lastLimitationCheckAt?: string
   lastWorkoutPlan?: GutoWorkoutPlan | null
+  lastDietPlan?: DietPlan | null
   proactiveMemories?: ProactiveMemory[]
   proactiveImpacts?: ProactiveImpact[]
   proactivePrompt?: ProactivePrompt | null

@@ -135,23 +135,27 @@ export function localizeGutoWorkoutPlan(plan: GutoWorkoutPlan | null | undefined
   const validLang = normalizeLanguage(language)
   const normalizedFocus = normalizeTitle(plan.focus)
   const shouldReplaceFocus = Boolean(plan.focusKey) || GENERIC_WORKOUT_TITLES.has(normalizedFocus)
-  const localizedFocus = shouldReplaceFocus ? getLocalizedWorkoutTitle(plan.focusKey, validLang, plan.goal) : plan.focus
-  const localizedExercises = plan.exercises.map((exercise) => {
-    const copyKey = EXERCISE_COPY_BY_ID[exercise.id] ? exercise.id : EXERCISE_COPY_ALIASES[exercise.id]
+  const localizedFocus = shouldReplaceFocus ? getLocalizedWorkoutTitle(plan.focusKey, validLang, plan.goal) : (plan.focus || "")
+  const rawExercises = Array.isArray(plan.exercises) ? plan.exercises : []
+  const localizedExercises = rawExercises.map((exercise) => {
+    if (!exercise || typeof exercise !== "object") return exercise
+    const copyKey = exercise.id && EXERCISE_COPY_BY_ID[exercise.id] ? exercise.id : (exercise.id ? EXERCISE_COPY_ALIASES[exercise.id] : undefined)
     const copy = copyKey ? EXERCISE_COPY_BY_ID[copyKey]?.[validLang] : undefined
     return copy ? { ...exercise, ...copy } : exercise
   })
 
-  if (process.env.NODE_ENV === "development") {
-    console.info("[GUTO_WORKOUT] localized plan language", validLang)
+  let formattedDateLabel = plan.dateLabel || ""
+  if (plan.scheduledFor) {
+    const parsed = new Date(plan.scheduledFor)
+    if (!isNaN(parsed.getTime())) {
+      formattedDateLabel = parsed.toLocaleDateString(validLang, { weekday: "long", day: "2-digit", month: "2-digit" })
+    }
   }
 
   return {
     ...plan,
     focus: localizedFocus,
-    dateLabel: plan.scheduledFor
-      ? new Date(plan.scheduledFor).toLocaleDateString(validLang, { weekday: "long", day: "2-digit", month: "2-digit" })
-      : plan.dateLabel,
+    dateLabel: formattedDateLabel,
     exercises: localizedExercises,
   }
 }

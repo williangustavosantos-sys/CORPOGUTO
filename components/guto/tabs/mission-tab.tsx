@@ -154,11 +154,14 @@ const missionCopy = {
 } as const
 
 function hasInvalidWorkoutVideo(plan?: GutoWorkoutPlan | null): boolean {
-  if (!plan?.exercises?.length) return false
+  if (!plan || !Array.isArray(plan.exercises) || plan.exercises.length === 0) return false
   return plan.exercises.some((exercise) =>
+    !exercise ||
     !exercise.id ||
     exercise.videoProvider !== "local" ||
-    !exercise.videoUrl?.startsWith("/exercise/visuals/")
+    !exercise.videoUrl ||
+    typeof exercise.videoUrl !== "string" ||
+    !exercise.videoUrl.startsWith("/exercise/visuals/")
   )
 }
 
@@ -182,7 +185,7 @@ export function MissionTab({
   const [onlineOpen, setOnlineOpen] = useState(false)
   const [completedExerciseIds, setCompletedExerciseIds] = useState<string[]>([])
   const [expandedExerciseId, setExpandedExerciseId] = useState<string | null>(null)
-  const exercises = useMemo(() => workoutPlan?.exercises || [], [workoutPlan])
+  const exercises = useMemo(() => Array.isArray(workoutPlan?.exercises) ? workoutPlan.exercises.filter(Boolean) : [], [workoutPlan])
   const missionKey = workoutPlan?.scheduledFor || workoutPlan?.focus || "empty"
   const completedCount = completedExerciseIds.length
   const progress = exercises.length ? Math.round((completedCount / exercises.length) * 100) : 0
@@ -195,6 +198,7 @@ export function MissionTab({
   }).format(new Date())
   const protectedToday = Boolean(memory?.proactiveImpacts?.some((impact) =>
     impact.status === "active" &&
+    Array.isArray(impact.affectedDates) &&
     impact.affectedDates.includes(todayKey) &&
     (impact.workoutEffect === "protected" || impact.missionEffect === "protected")
   ))
@@ -215,13 +219,13 @@ export function MissionTab({
     [completedExerciseIds, exercises, trainedToday]
   )
   const exercisesById = useMemo(
-    () => new Map(exercises.map((exercise) => [exercise.id, exercise])),
+    () => new Map(exercises.filter((e) => Boolean(e && e.id)).map((exercise) => [exercise.id, exercise])),
     [exercises]
   )
 
   useEffect(() => {
     setStarted(Boolean(trainedToday || adaptedMissionToday))
-    setCompletedExerciseIds(trainedToday ? exercises.map((exercise) => exercise.id) : [])
+    setCompletedExerciseIds(trainedToday ? exercises.filter((e) => Boolean(e && e.id)).map((exercise) => exercise.id) : [])
     setExpandedExerciseId(null)
   }, [adaptedMissionToday, exercises, missionKey, trainedToday])
 
