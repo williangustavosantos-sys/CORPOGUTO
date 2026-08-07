@@ -190,12 +190,18 @@ export function MissionTab({
   const completedCount = completedExerciseIds.length
   const progress = exercises.length ? Math.round((completedCount / exercises.length) * 100) : 0
   const invalidWorkoutVideo = hasInvalidWorkoutVideo(workoutPlan)
-  const todayKey = new Intl.DateTimeFormat("en-CA", {
-    timeZone: process.env.NEXT_PUBLIC_GUTO_TIME_ZONE || "Europe/Rome",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date())
+  const todayKey = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: process.env.NEXT_PUBLIC_GUTO_TIME_ZONE || "Europe/Rome",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date())
+    } catch {
+      return new Date().toISOString().split("T")[0]
+    }
+  }, [])
   const protectedToday = Boolean(memory?.proactiveImpacts?.some((impact) =>
     impact.status === "active" &&
     Array.isArray(impact.affectedDates) &&

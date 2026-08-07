@@ -2848,6 +2848,16 @@ export function GutoApp({
                 onPointerUp={stopHold}
                 onPointerLeave={stopHold}
                 onPointerCancel={stopHold}
+                onClick={() => {
+                  if (pactCompleteRef.current) return
+                  pactCompleteRef.current = true
+                  gutoAudio.playGutoFeedback("hold_complete")
+                  setPactProgress(100)
+                  void startSystem(
+                    committedName || formatGutoName(draftName || userName || ""),
+                    selectedLanguage
+                  )
+                }}
                   aria-label={locale.pactHoldAria}
                 className="guto-biometric-scanner relative flex h-44 w-44 touch-none items-center justify-center rounded-full"
                 animate={{
@@ -3733,27 +3743,29 @@ export function GutoApp({
 
       {showValidationFlow && (
         <div className="fixed inset-0 z-50">
-          <WorkoutValidationFlow
-            language={selectedLanguage}
-            userId={gutoUserId}
-            workoutFocus={localizedWorkoutPlan?.focusKey || "full_body"}
-            workoutLabel={localizedWorkoutPlan?.focus || ""}
-            locationMode={validationLocationMode}
-            workoutPlan={localizedWorkoutPlan}
-            onComplete={(validationHistory) => {
-              // Optimistic: update validation history immediately
-              setMemory((prev) => prev ? { ...prev, validationHistory } : prev)
-              setShowValidationFlow(false)
-              setActiveTab("caminho")
-              // Refresh full memory so totalXp, trainedToday, streak sync everywhere
-              getGutoMemory().then((fresh) => {
-                if (fresh) setMemory(fresh)
-              }).catch(() => {})
-              // Tell ArenaTab to refetch rankings
-              setArenaRefreshKey((k) => k + 1)
-            }}
-            onClose={() => setShowValidationFlow(false)}
-          />
+          <TabErrorBoundary>
+            <WorkoutValidationFlow
+              language={selectedLanguage}
+              userId={gutoUserId}
+              workoutFocus={localizedWorkoutPlan?.focusKey || "full_body"}
+              workoutLabel={localizedWorkoutPlan?.focus || ""}
+              locationMode={validationLocationMode}
+              workoutPlan={localizedWorkoutPlan}
+              onComplete={(validationHistory) => {
+                // Optimistic: update validation history immediately
+                setMemory((prev) => prev ? { ...prev, validationHistory } : prev)
+                setShowValidationFlow(false)
+                setActiveTab("caminho")
+                // Refresh full memory so totalXp, trainedToday, streak sync everywhere
+                getGutoMemory().then((fresh) => {
+                  if (fresh) setMemory(fresh)
+                }).catch(() => {})
+                // Tell ArenaTab to refetch rankings
+                setArenaRefreshKey((k) => k + 1)
+              }}
+              onClose={() => setShowValidationFlow(false)}
+            />
+          </TabErrorBoundary>
         </div>
       )}
     </div>

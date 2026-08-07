@@ -213,10 +213,16 @@ export function PathTab({ language, memory, workoutPlan, validationHistory, onMe
   const todayDay = pathMonth.days.find((day) => day.dateKey === pathMonth.todayKey)
   const streak = memory?.streak ?? 0
   const history = validationHistory || memory?.validationHistory || []
-  const selectedDateLabel = new Intl.DateTimeFormat(validLang, {
-    day: "2-digit",
-    month: "long",
-  }).format(selectedDay.date)
+  const selectedDateLabel = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat(validLang, {
+        day: "2-digit",
+        month: "long",
+      }).format(selectedDay.date)
+    } catch {
+      return String(selectedDay.date)
+    }
+  }, [selectedDay.date, validLang])
   const todayXp = todayDay?.xp ?? 0
   const hasWorkoutPlan = Boolean(workoutPlan?.exercises?.length)
 
