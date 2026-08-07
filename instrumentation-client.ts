@@ -7,21 +7,15 @@ import * as Sentry from "@sentry/nextjs";
 Sentry.init({
   dsn: "https://a5be3191825f2710b5547e00933751ed@o4511394950152192.ingest.de.sentry.io/4511394954215504",
 
-  // Add optional integrations for additional features
-  integrations: [Sentry.replayIntegration()],
+  // Closed beta: keep production telemetry limited to error monitoring.
+  tracesSampleRate: process.env.NODE_ENV === "production" ? 0 : 1,
+  enableLogs: false,
 
-  // Define how likely traces are sampled. Adjust this value in production, or use tracesSampler for greater control.
-  tracesSampleRate: 1,
-  // Enable logs to be sent to Sentry
-  enableLogs: true,
-
-  // Define how likely Replay events are sampled.
-  // This sets the sample rate to be 10%. You may want this to be 100% while
-  // in development and sample at a lower rate in production
-  replaysSessionSampleRate: 0.1,
-
-  // Define how likely Replay events are sampled when an error occurs.
-  replaysOnErrorSampleRate: 1.0,
+  // Console messages can contain user or health context and must not be
+  // attached to error events as breadcrumbs.
+  beforeBreadcrumb(breadcrumb) {
+    return breadcrumb.category === "console" ? null : breadcrumb;
+  },
 
   // PII disabled — GUTO handles health data (GDPR Art. 9); Sentry is not listed as sub-processor.
   sendDefaultPii: false,

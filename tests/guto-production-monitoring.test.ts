@@ -8,10 +8,10 @@ describe("GUTO production browser monitoring", () => {
     assert.doesNotMatch(source, /replayIntegration/)
     assert.doesNotMatch(source, /replays(?:Session|OnError)SampleRate/)
     assert.match(source, /enableLogs:\s*false/)
+    assert.match(source, /breadcrumb\.category === "console" \? null : breadcrumb/)
 
     const productionSample = source.match(/NODE_ENV === "production" \? ([0-9.]+) : 1/)
     assert.ok(productionSample)
-    assert.ok(Number(productionSample[1]) > 0)
-    assert.ok(Number(productionSample[1]) <= 0.1)
+    assert.equal(Number(productionSample[1]), 0)
   })
 })
