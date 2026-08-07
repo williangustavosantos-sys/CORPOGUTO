@@ -4,7 +4,7 @@ import { Component, useCallback, useEffect, useMemo, useRef, useState, type Reac
 import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { AnimatePresence, motion } from "framer-motion"
-import { Activity, ArrowLeft, Check, CheckCircle2, Download, Fingerprint, Languages, Loader2, Send, Settings, Shield, Trash2, UserRound, Volume2 } from "lucide-react"
+import { Activity, ArrowLeft, Check, CheckCircle2, Download, Fingerprint, Languages, Loader2, LogOut, Send, Settings, Shield, Trash2, UserRound, Volume2 } from "lucide-react"
 import { Country } from "country-state-city"
 
 import { BottomNavigation, type TabType } from "./bottom-navigation"
@@ -124,6 +124,7 @@ const stageCopy: Record<
     settingsNamePlaceholder: string
     settingsSaveName: string
     settingsClose: string
+    settingsLogout: string
     settingsBack: string
     settingsProfile: string
     settingsGoal: string
@@ -198,6 +199,7 @@ const stageCopy: Record<
     settingsNamePlaceholder: "SEU NOME",
     settingsSaveName: "Salvar nome",
     settingsClose: "Fechar ajustes",
+    settingsLogout: "Sair da conta",
     settingsBack: "Voltar",
     settingsProfile: "Perfil",
     settingsGoal: "Objetivo",
@@ -271,6 +273,7 @@ const stageCopy: Record<
     settingsNamePlaceholder: "YOUR NAME",
     settingsSaveName: "Save name",
     settingsClose: "Close settings",
+    settingsLogout: "Sign out",
     settingsBack: "Back",
     settingsProfile: "Profile",
     settingsGoal: "Goal",
@@ -344,6 +347,7 @@ const stageCopy: Record<
     settingsNamePlaceholder: "IL TUO NOME",
     settingsSaveName: "Salva nome",
     settingsClose: "Chiudi impostazioni",
+    settingsLogout: "Esci dall'account",
     settingsBack: "Indietro",
     settingsProfile: "Profilo",
     settingsGoal: "Obiettivo",
@@ -754,7 +758,7 @@ export function GutoApp({
   language: string
   skipIntro?: boolean
 }) {
-  const { user, login, isLoading: authLoading } = useAuth()
+  const { user, login, logout: logoutSession, isLoading: authLoading } = useAuth()
   const router = useRouter()
   const [isHydrated, setIsHydrated] = useState(false)
   const [stage, setStage] = useState<AppStage>(skipIntro ? "language" : "intro")
@@ -1662,6 +1666,11 @@ export function GutoApp({
 
     setStage("system")
   }, [settingsMode, privacyConfirm])
+
+  const handleStudentLogout = useCallback(() => {
+    gutoAudio.playGutoFeedback("tap")
+    logoutSession()
+  }, [logoutSession])
 
   useEffect(() => {
     if (settingsMode !== "privacy") return
@@ -3046,6 +3055,11 @@ export function GutoApp({
                   <button type="button" onClick={() => { gutoAudio.playGutoFeedback("tap"); setPrivacyMsg(null); setPrivacyConfirm(null); setDeleteConfirmText(""); setSettingsMode("privacy"); }} aria-label={locale.settingsPrivacy} className="mx-auto mt-2 flex min-h-11 max-w-[18rem] items-center justify-center gap-2 rounded-full border border-[rgba(82,231,255,0.32)] bg-white/42 px-4 text-center font-mono text-[9px] font-black uppercase tracking-[0.14em] text-[rgba(13,35,65,0.52)] shadow-[inset_0_1px_0_rgba(255,255,255,0.88)]">
                     <Shield className="guto-settings-choice-icon" strokeWidth={2.2} />
                     <span>{locale.settingsPrivacy}</span>
+                  </button>
+
+                  <button type="button" onClick={handleStudentLogout} aria-label={locale.settingsLogout} className="mx-auto flex min-h-11 max-w-[18rem] items-center justify-center gap-2 rounded-full border border-[rgba(13,35,65,0.14)] bg-white/42 px-4 text-center font-mono text-[9px] font-black uppercase tracking-[0.14em] text-[rgba(13,35,65,0.52)] shadow-[inset_0_1px_0_rgba(255,255,255,0.88)]">
+                    <LogOut className="guto-settings-choice-icon" strokeWidth={2.2} />
+                    <span>{locale.settingsLogout}</span>
                   </button>
                 </div>
               )
