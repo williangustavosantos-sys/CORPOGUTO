@@ -84,7 +84,7 @@ interface NameGate {
 type GutoMemoryPayload = Parameters<typeof saveGutoMemory>[0]
 
 const STORAGE_KEY = "guto-white-lab-profile"
-const STORAGE_VERSION = 3  // bump aqui para limpar estados voláteis antigos em todos os dispositivos
+const STORAGE_VERSION = 4  // bump v4 para limpar cache volátil antigo e estabilizar o boot
 const STORAGE_VERSION_KEY = "guto-storage-version"
 const DEBUG_RESET_KEY = "guto-debug-reset"
 const HOLD_INTERVAL_MS = 16
@@ -1029,6 +1029,12 @@ export function GutoApp({
     let cancelled = false
 
     if (!user?.userId) {
+      const guestVersionKey = `${STORAGE_VERSION_KEY}-guest`
+      const guestVersion = parseInt(readStorageItem(guestVersionKey) ?? "0", 10)
+      if (guestVersion < STORAGE_VERSION) {
+        clearVolatileGutoStorage("guest")
+        writeStorageItem(guestVersionKey, String(STORAGE_VERSION))
+      }
       const savedLang = readResolvedStoredLanguage({ scope: "onboarding", fallbackLanguage: language })
       const savedInviteToken = readStorageItem(PENDING_INVITE_TOKEN_KEY)
       const savedEntryMode = readStorageItem(ENTRY_MODE_KEY)

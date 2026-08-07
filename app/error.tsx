@@ -17,12 +17,13 @@ export default function ErrorPage({
   const handleReset = () => {
     try {
       if (typeof window !== "undefined") {
+        window.localStorage.clear()
         window.sessionStorage.clear()
       }
     } catch {}
     reset()
     if (typeof window !== "undefined") {
-      window.location.reload()
+      window.location.href = "/"
     }
   }
 
