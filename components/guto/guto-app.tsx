@@ -2859,9 +2859,6 @@ export function GutoApp({
                 onPointerCancel={stopHold}
                 onClick={() => {
                   if (pactCompleteRef.current) return
-                  pactCompleteRef.current = true
-                  gutoAudio.playGutoFeedback("hold_complete")
-                  setPactProgress(100)
                   void startSystem(
                     committedName || formatGutoName(draftName || userName || ""),
                     selectedLanguage
