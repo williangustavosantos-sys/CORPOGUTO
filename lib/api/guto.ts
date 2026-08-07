@@ -536,6 +536,7 @@ export async function saveGutoMemory(payload: {
 export async function getGutoMemory() {
   return apiRequest<GutoMemory>(`/guto/memory`, {
     method: "GET",
+    suppressAuthRedirect: true,
   })
 }
 

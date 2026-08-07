@@ -90,6 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .catch(() => {
           removeStoredToken()
           setToken(null)
+          setUser(null)
           setIsLoading(false)
         })
     } else {

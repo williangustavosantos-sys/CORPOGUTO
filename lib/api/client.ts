@@ -175,9 +175,14 @@ export async function apiRequest<T>(
       const isLoginEndpoint = path.includes("/login")
       const shouldSuppressAuthRedirect = suppressAuthRedirect || isQaDemoMode()
 
+      removeAuthToken()
+
       if (!isLoginEndpoint && typeof window !== "undefined" && !shouldSuppressAuthRedirect) {
-        removeAuthToken()
-        if (!window.location.pathname.includes("/login") && !window.location.pathname.includes("/convite")) {
+        if (
+          window.location.pathname !== "/" &&
+          !window.location.pathname.includes("/login") &&
+          !window.location.pathname.includes("/convite")
+        ) {
           window.location.href = "/login"
         }
       }

@@ -1447,30 +1447,30 @@ export function ChatTab({
       }
 
       setMessages((prev) => appendMessagesWithoutDuplicateGuto(prev, [gutoMessage]))
-      if (data.acao === "updateWorkout" && data.workoutPlan) {
+      if (data?.acao === "updateWorkout" && data?.workoutPlan) {
         onWorkoutPlanUpdated?.(data.workoutPlan)
       }
-      const patchHasProactiveMemories = applyProactiveMemoriesFromPatch(data.memoryPatch)
-      if (data.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
+      const patchHasProactiveMemories = applyProactiveMemoriesFromPatch(data?.memoryPatch)
+      if (data?.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
         onMemoryPatch?.(data.memoryPatch)
       }
-      if (data.acao === "changeLanguage" && data.memoryPatch?.language) {
+      if (data?.acao === "changeLanguage" && data?.memoryPatch?.language) {
         const nextLang = data.memoryPatch.language as SupportedLanguage
         if (["pt-BR", "en-US", "it-IT"].includes(nextLang)) {
           onChangeLanguage?.(nextLang)
         }
       }
-      if (data.acao === "requestDeleteAccount") {
+      if (data?.acao === "requestDeleteAccount") {
         onOpenPrivacySettings?.()
       }
-      if (data.proactiveMemoryAction) {
+      if (data?.proactiveMemoryAction) {
         void handleProactiveMemoryAction(data.proactiveMemoryAction)
       } else if (!patchHasProactiveMemories) {
         void refreshProactiveMemories()
       }
       stopTypingLoop()
-      const closedWorkoutFlow = data.acao === "updateWorkout" || Boolean(data.workoutPlan)
-      const dietReadyFromBackend = data.memoryPatch?.dietGenerationStatus === "ready_to_generate"
+      const closedWorkoutFlow = data?.acao === "updateWorkout" || Boolean(data?.workoutPlan)
+      const dietReadyFromBackend = data?.memoryPatch?.dietGenerationStatus === "ready_to_generate"
       if (closedWorkoutFlow) {
         suppressProactivityUntilRef.current = Date.now() + PROACTIVITY_SUPPRESS_AFTER_WORKOUT_MS
         if (dietReadyFromBackend && !dietGenerationAfterWorkoutRef.current) {

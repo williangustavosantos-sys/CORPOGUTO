@@ -58,7 +58,7 @@ export async function loginUser(emailOrId: string, password: string): Promise<Lo
 }
 
 export async function getMe(): Promise<AuthUser> {
-  return apiRequest<AuthUser>("/auth/me")
+  return apiRequest<AuthUser>("/auth/me", { suppressAuthRedirect: true })
 }
 
 export async function getInvite(token: string): Promise<InvitePreview> {
