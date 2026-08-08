@@ -2321,8 +2321,13 @@ export function GutoApp({
       initialXpGranted={memory?.initialXpGranted}
       initialXpRewardSeen={memory?.initialXpRewardSeen}
       onXpRewardSeen={() => {
-        setMemory((prev) => prev ? { ...prev, initialXpRewardSeen: true } : prev)
-        persistMemory({ initialXpRewardSeen: true })
+        setMemory((prev) => {
+          if (!prev) return prev
+          const next = { ...prev, initialXpRewardSeen: true }
+          memoryRef.current = next
+          return next
+        })
+        void persistMemory({ initialXpRewardSeen: true }, { optimistic: false })
       }}
       onProfileUpdate={updateUserProfileField}
       onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}

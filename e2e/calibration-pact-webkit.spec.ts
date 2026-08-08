@@ -105,3 +105,100 @@ test('calibration commit with a lost response recovers and enters pact', async (
   expect(memoryReadsAfterLostResponse).toBe(1)
   expect(memory.trainingGoal).toBe('muscle_gain')
 })
+
+test('Bora stays dismissed and opens chat when reward persistence and arrival responses are lost', async ({ page }) => {
+  test.setTimeout(60_000)
+
+  const postPactMemory = {
+    ...baseMemory,
+    initialXpGranted: true,
+    initialXpRewardSeen: false,
+    totalXp: 100,
+    trainingLevel: 'consistent',
+    trainingGoal: 'muscle_gain',
+    preferredTrainingLocation: 'gym',
+    biologicalSex: 'male',
+    userAge: 35,
+    country: 'Itália',
+    countryCode: 'IT',
+    city: 'Roma',
+    trainingPathology: 'SEM DOR',
+    foodRestrictions: 'COMO DE TUDO',
+    heightCm: 178,
+    weightKg: 82,
+    lastWorkoutPlan: {
+      focus: 'Peito, Ombro e Tríceps',
+      dateLabel: 'hoje',
+      scheduledFor: 'hoje',
+      summary: 'Treino oficial',
+      exercises: [{ id: 'supino', name: 'Supino reto máquina', sets: 3, reps: '10' }],
+    },
+    lastDietPlan: {
+      userId: USER_ID,
+      generatedAt: '2026-08-08T09:00:00.000Z',
+      country: 'Itália',
+      macros: { targetKcal: 2200, proteinG: 150, carbsG: 250, fatG: 65 },
+      meals: [{ id: 'almoco', name: 'Almoço', foods: [{ id: 'arroz', name: 'Arroz', amount: '150 g' }] }],
+    },
+  }
+  let rewardSeenWrites = 0
+  let arrivalRequests = 0
+
+  await page.addInitScript(({ token, userId }) => {
+    localStorage.setItem('guto-auth-token', token)
+    localStorage.setItem('guto-selected-language', 'pt-BR')
+    localStorage.setItem(`guto-storage-version-${userId}`, '4')
+    localStorage.setItem(`guto-white-lab-profile-${userId}`, JSON.stringify({
+      language: 'pt-BR',
+      userName: 'QA WebKit',
+      onboardingComplete: true,
+      namingConfirmed: true,
+      calibrationComplete: true,
+      pactAccepted: true,
+      consentHealthFitness: true,
+      acceptedTerms: true,
+      consentAcceptedAt: '2026-07-20T10:00:00.000Z',
+    }))
+
+    const originalSetItem = Storage.prototype.setItem
+    Storage.prototype.setItem = function(key, value) {
+      if (String(key).startsWith('guto-initial-xp-reward-seen:')) {
+        throw new DOMException('QuotaExceededError', 'QuotaExceededError')
+      }
+      return originalSetItem.call(this, key, value)
+    }
+  }, { token: TOKEN, userId: USER_ID })
+
+  const isApi = (url: URL) => url.pathname.startsWith('/api/guto') || url.hostname.includes('cerebroguto')
+  await page.route((url) => isApi(url), (route) => route.fulfill(json({})))
+  await page.route((url) => isApi(url) && url.pathname.endsWith('/auth/me'), (route) => route.fulfill(json(user)))
+  await page.route((url) => isApi(url) && url.pathname.endsWith('/guto/memory'), async (route) => {
+    if (route.request().method() === 'GET') return route.fulfill(json(postPactMemory))
+
+    const body = route.request().postDataJSON() as Record<string, unknown>
+    if (body.initialXpRewardSeen === true) {
+      rewardSeenWrites += 1
+      await new Promise((resolve) => setTimeout(resolve, 16_000))
+      return route.abort('timedout')
+    }
+    return route.fulfill(json({ ...postPactMemory, ...body }))
+  })
+  await page.route((url) => isApi(url) && url.pathname.endsWith('/guto/proactive'), async (route) => {
+    arrivalRequests += 1
+    await new Promise((resolve) => setTimeout(resolve, 16_000))
+    return route.abort('timedout')
+  })
+  await page.route((url) => isApi(url) && url.pathname.endsWith('/guto/events'), (route) => route.fulfill(json({ ok: true })))
+
+  await page.goto('/')
+  const bora = page.getByRole('button', { name: 'Bora', exact: true })
+  await expect(bora).toBeVisible()
+  await bora.click({ force: true })
+
+  await page.waitForTimeout(17_000)
+
+  await expect(bora).not.toBeVisible()
+  await expect(page.getByText(/Finalmente, QA WebKit/i)).toBeVisible()
+  expect(rewardSeenWrites).toBe(1)
+  expect(arrivalRequests).toBe(1)
+})
