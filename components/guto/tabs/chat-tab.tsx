@@ -735,6 +735,9 @@ export function ChatTab({
   const blockingProactiveCardRef = useRef(false)
   const lastProactiveKeyRef = useRef<string | null>(null)
   const arrivalBriefingRequestedRef = useRef(false)
+  const initialXpCardDismissedRef = useRef(
+    initialXpRewardSeen || readInitialXpRewardSeen(userId)
+  )
   const suppressProactivityUntilRef = useRef(0)
   const dietGenerationAfterWorkoutRef = useRef(false)
   const shouldForceArrivalBriefingRef = useRef((() => {
@@ -984,7 +987,11 @@ export function ChatTab({
 
   useEffect(() => {
     if (!initialXpGranted) return
-    if (initialXpRewardSeen || readInitialXpRewardSeen(userId)) return
+    if (
+      initialXpCardDismissedRef.current ||
+      initialXpRewardSeen ||
+      readInitialXpRewardSeen(userId)
+    ) return
     setShowInitialXpCard(true)
     const successTimer = window.setTimeout(() => {
       gutoAudio.playGutoFeedback("success")
@@ -1163,15 +1170,20 @@ export function ChatTab({
       }
     } catch (error) {
       console.warn(`Proatividade do GUTO indisponível: ${getApiErrorMessage(error)}`)
+      if (forceArrivalBriefing) {
+        arrivalBriefingRequestedRef.current = false
+        setMessages((prev) => prev.length > 0 ? prev : [localOpeningMessage])
+      }
     } finally {
       proactiveInFlightRef.current = false
       if (forceArrivalBriefing) setIsSending(false)
     }
-  }, [applyProactiveMemoriesFromPatch, isMuted, language, onMemoryPatch, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
+  }, [applyProactiveMemoriesFromPatch, isMuted, language, localOpeningMessage, onMemoryPatch, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
 
   // Após o card +100 XP: a chegada passa pelo backend, que decide se precisa
   // abrir contexto semanal antes de missão.
   const dismissInitialXpCard = useCallback(() => {
+    initialXpCardDismissedRef.current = true
     setShowInitialXpCard(false)
     writeInitialXpRewardSeen(userId)
     onXpRewardSeen?.()
