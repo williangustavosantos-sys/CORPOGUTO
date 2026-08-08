@@ -57,7 +57,7 @@ export interface ActiveContext {
   id: string
   version: number
   type: ActiveContextType
-  sourceSurface: "workout" | "diet" | "chat"
+  sourceSurface: "mission" | "diet"
   originalItem: ActiveContextItem
   currentItem: ActiveContextItem
   lastSuggestedItem: ActiveContextItem | null
@@ -237,6 +237,12 @@ export interface SendGutoMessageRequest {
   }[]
   expectedResponse?: GutoExpectedResponse | null
   turnId: string
+  requestId: string
+  contextId: string | null
+  contextVersion: number | null
+  activeContextType: ActiveContextType | null
+  activeItemId: string | null
+  lastSuggestedItem: GutoLastSuggestedItem | null
 }
 
 export type ProactiveMemoryStage =
@@ -349,6 +355,7 @@ export interface GutoMemory {
   proactiveImpacts?: ProactiveImpact[]
   proactivePrompt?: ProactivePrompt | null
   activeConversationContext?: ActiveConversationContext | null
+  activeContext?: ActiveContext | null
   dietGenerationStatus?: "idle" | "ready_to_generate" | "generating" | "generated" | "needs_clarification" | "failed"
   weeklyWorkoutPlan?: {
     studentId: string
@@ -475,6 +482,14 @@ export async function sendGutoMessage(payload: SendGutoMessageRequest) {
     timeoutMs: 35000,
     body: JSON.stringify(payload),
   })
+}
+
+export async function setGutoActiveContext(context: ActiveContext | null) {
+  const result = await apiRequest<{ ok: true; activeContext: ActiveContext | null }>("/guto/active-context", {
+    method: "POST",
+    body: JSON.stringify({ context }),
+  })
+  return result.activeContext
 }
 
 export async function trackGutoEvent(payload: {

@@ -8,7 +8,6 @@ import { Dumbbell, Loader2, Mic, Plane, Send, TrendingUp, UtensilsCrossed, Volum
 import { getApiErrorMessage } from "@/lib/api/client"
 import {
   cancelDiscardRequest,
-  clearActiveExercise,
   confirmProactiveMemory,
   discardProactiveMemory,
   extractProactivityEvents,
@@ -17,22 +16,30 @@ import {
   getProactiveMemories,
   requestDiscardProactiveMemory,
   sendGutoMessage,
-  setActiveExercise,
+  setGutoActiveContext,
   trackGutoEvent,
   updateProactiveMemory,
   validateProactiveMemory,
 } from "@/lib/api/guto"
 import type {
+  ActiveContext,
   DietFood,
   DietMeal,
   GutoAvatarEmotion,
   GutoExpectedResponse,
+  GutoLastSuggestedItem,
   GutoMemory,
   GutoProactiveMemoryAction,
   GutoProactivityActionResult,
   GutoWorkoutPlan,
   ProactiveMemory,
 } from "@/lib/api/guto"
+import {
+  buildGutoLastSuggestedItem,
+  buildGutoModelInputWithActiveContext,
+  resolveGutoResponseForRender,
+  shouldHydrateActiveContext,
+} from "@/lib/guto-context-correlation"
 import {
   formatProactiveMemoryLabel,
   formatProactiveDate,
@@ -142,10 +149,16 @@ interface StoredChatState {
 
 interface PendingChatTurn {
   turnId: string
+  requestId: string
   displayText: string
   modelInput: string
   language: SupportedLanguage
   createdAt: string
+  contextId: string | null
+  contextVersion: number | null
+  activeContextType: ActiveContext["type"] | null
+  activeItemId: string | null
+  lastSuggestedItem: GutoLastSuggestedItem | null
 }
 
 const chatCopy: Record<
@@ -593,6 +606,16 @@ function createGutoTurnId(userId: string): string {
   return `${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+function normalizeActiveContextItemId(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 96) || "item"
+}
+
 export function ChatTab({
   userId,
   userName,
@@ -703,6 +726,8 @@ export function ChatTab({
   const handledExerciseQuestionRef = useRef<string | null>(null)
   const activeExerciseContextRef = useRef<string | null>(null)
   const activeDietContextRef = useRef<string | null>(null)
+  const activeContextRef = useRef<ActiveContext | null>(memory?.activeContext || null)
+  const activeContextSyncRef = useRef<Promise<ActiveContext | null> | null>(null)
   const handledFoodQuestionRef = useRef<string | null>(null)
   const processedProactiveActionKeysRef = useRef<Set<string>>(new Set())
   const proactiveInFlightRef = useRef(false)
@@ -978,12 +1003,15 @@ export function ChatTab({
   }, [initialXpGranted, initialXpRewardSeen, userId])
 
   const clearActiveContext = useCallback(() => {
-    const hadExercise = activeExerciseContextRef.current !== null
     activeExerciseContextRef.current = null
     activeDietContextRef.current = null
+    activeContextRef.current = null
     setContextChip(null)
-    if (hadExercise) void clearActiveExercise()
-  }, [])
+    activeContextSyncRef.current = setGutoActiveContext(null).then((persisted) => {
+      onMemoryPatch?.({ activeContext: persisted })
+      return persisted
+    })
+  }, [onMemoryPatch])
 
   const wrapWithActiveContext = useCallback((text: string) => {
     const exerciseCtx = activeExerciseContextRef.current
@@ -992,6 +1020,17 @@ export function ChatTab({
     if (dietCtx) return `${dietCtx} User question: ${text}`
     return text
   }, [])
+
+  useEffect(() => {
+    const incoming = memory?.activeContext || null
+    if (!incoming) return
+    if (!shouldHydrateActiveContext(activeContextRef.current, incoming)) return
+    activeContextRef.current = incoming
+    setContextChip({
+      type: incoming.type === "workout" ? "exercise" : "meal",
+      label: incoming.currentItem.name,
+    })
+  }, [memory?.activeContext])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -1363,6 +1402,11 @@ export function ChatTab({
 
     const safeLanguage = getLanguage(language) as SupportedLanguage
 
+    if (activeContextSyncRef.current) {
+      await activeContextSyncRef.current
+    }
+    const activeContextSnapshot = activeContextRef.current
+
     const userMessage: Message = {
       id: `u-${Date.now()}`,
       text: displayText,
@@ -1371,14 +1415,21 @@ export function ChatTab({
     }
 
     const turnId = options?.turnId || createGutoTurnId(userId)
+    const requestId = createGutoTurnId(userId)
     const nextPendingTurn: PendingChatTurn = options?.resumePending && pendingTurnRef.current
       ? pendingTurnRef.current
       : {
           turnId,
+          requestId,
           displayText,
-          modelInput,
+          modelInput: buildGutoModelInputWithActiveContext(modelInput, activeContextSnapshot),
           language: safeLanguage,
           createdAt: new Date().toISOString(),
+          contextId: activeContextSnapshot?.id || null,
+          contextVersion: activeContextSnapshot?.version || null,
+          activeContextType: activeContextSnapshot?.type || null,
+          activeItemId: activeContextSnapshot?.currentItem.id || null,
+          lastSuggestedItem: buildGutoLastSuggestedItem(activeContextSnapshot),
         }
     const nextMessages = options?.hideUserBubble ? messagesRef.current : [...messagesRef.current, userMessage]
 
@@ -1424,7 +1475,7 @@ export function ChatTab({
 
       const data = await sendGutoMessage({
         profile: { name: userName || fallbackName[safeLanguage], userId },
-        input: modelInput,
+        input: nextPendingTurn.modelInput,
         language: safeLanguage,
         history: messagesRef.current.slice(-6).map((message) => ({
           role: message.isGuto ? "model" : "user",
@@ -1432,10 +1483,47 @@ export function ChatTab({
         })),
         expectedResponse,
         turnId: nextPendingTurn.turnId,
+        requestId: nextPendingTurn.requestId,
+        contextId: nextPendingTurn.contextId,
+        contextVersion: nextPendingTurn.contextVersion,
+        activeContextType: nextPendingTurn.activeContextType,
+        activeItemId: nextPendingTurn.activeItemId,
+        lastSuggestedItem: nextPendingTurn.lastSuggestedItem || null,
       })
 
-      const fala = data?.fala?.trim() || copy.emptyResponseFallback
+      const requestContext = {
+        turnId: nextPendingTurn.turnId,
+        requestId: nextPendingTurn.requestId,
+        contextId: nextPendingTurn.contextId,
+        contextVersion: nextPendingTurn.contextVersion,
+        activeContextType: nextPendingTurn.activeContextType,
+        activeItemId: nextPendingTurn.activeItemId,
+      }
+      const renderDecision = resolveGutoResponseForRender(
+        requestContext,
+        activeContextSnapshot,
+        data,
+        copy.emptyResponseFallback,
+      )
+      const fala = renderDecision.speech
       const messageId = `g-${Date.now()}`
+      if (data.activeContext !== undefined) {
+        activeContextRef.current = data.activeContext || null
+        onMemoryPatch?.({ activeContext: data.activeContext || null })
+      }
+      if (renderDecision.kind !== "accepted") {
+        syncExpectedResponse(null, null)
+        setMessages((prev) => appendMessagesWithoutDuplicateGuto(prev, [{
+          id: messageId,
+          text: fala,
+          isGuto: true,
+          timestamp: new Date(),
+          avatarEmotion: "default",
+        }]))
+        pendingTurnRef.current = null
+        setPendingTurn(null)
+        return
+      }
       syncExpectedResponse(data?.expectedResponse || null, data?.expectedResponse ? messageId : null)
 
       const gutoMessage: Message = {
@@ -1566,14 +1654,34 @@ export function ChatTab({
     setContextChip({ type: "exercise", label: exercise.name })
     // Persiste o exercício na fonte única (GutoMemory) para o cérebro saber dele
     // entre mensagens — não some no turno seguinte (CORE §6).
-    void setActiveExercise({
-      source: "chat",
+    const now = new Date().toISOString()
+    const item = {
+      id: exercise.id,
       name: exercise.name,
-      muscleGroup: exercise.muscleGroup,
+      workoutId: workoutPlan?.dateLabel || workoutPlan?.title || "current_workout",
+      position: workoutPlan?.exercises.findIndex((candidate) => candidate.id === exercise.id),
+      sets: exercise.sets,
       reps: String(exercise.reps),
       rest: exercise.rest,
-      totalSets: exercise.sets,
-      note: exercise.note || undefined,
+    }
+    const nextContext: ActiveContext = {
+      id: createGutoTurnId(userId),
+      version: 1,
+      type: "workout",
+      sourceSurface: "mission",
+      originalItem: item,
+      currentItem: item,
+      lastSuggestedItem: null,
+      rejectedItems: [],
+      acceptedItem: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+    activeContextRef.current = nextContext
+    activeContextSyncRef.current = setGutoActiveContext(nextContext).then((persisted) => {
+      activeContextRef.current = persisted
+      onMemoryPatch?.({ activeContext: persisted })
+      return persisted
     })
 
     const hintText = copy.exerciseContextHint(exercise.name)
@@ -1605,6 +1713,8 @@ export function ChatTab({
     synthesizeAndPlay,
     validLang,
     workoutPlan,
+    userId,
+    onMemoryPatch,
   ])
 
   useEffect(() => {
@@ -1618,6 +1728,33 @@ export function ChatTab({
     activeExerciseContextRef.current = null
     activeDietContextRef.current = buildDietModelContext(food, meal, memory, lang)
     setContextChip({ type: "meal", label: food.name })
+    const now = new Date().toISOString()
+    const item = {
+      id: normalizeActiveContextItemId(food.name),
+      name: food.name,
+      mealId: meal.id,
+      mealName: meal.name,
+      quantity: food.quantity,
+    }
+    const nextContext: ActiveContext = {
+      id: createGutoTurnId(userId),
+      version: 1,
+      type: "diet",
+      sourceSurface: "diet",
+      originalItem: item,
+      currentItem: item,
+      lastSuggestedItem: null,
+      rejectedItems: [],
+      acceptedItem: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+    activeContextRef.current = nextContext
+    activeContextSyncRef.current = setGutoActiveContext(nextContext).then((persisted) => {
+      activeContextRef.current = persisted
+      onMemoryPatch?.({ activeContext: persisted })
+      return persisted
+    })
 
     const hintText = copy.mealContextHint(food.name)
     const hintId = `g-meal-ctx-${meal.id}-${food.name}`
@@ -1647,6 +1784,8 @@ export function ChatTab({
     pendingFoodQuestion,
     synthesizeAndPlay,
     validLang,
+    userId,
+    onMemoryPatch,
   ])
 
   const handleSend = async () => {
