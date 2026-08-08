@@ -19,7 +19,9 @@ function context(id: string, type: "workout" | "diet", itemId: string): ActiveCo
     sourceSurface: type === "workout" ? "mission" : "diet",
     originalItem: item,
     currentItem: item,
+    lastSuggestedItem: null,
     rejectedItems: [],
+    acceptedItem: null,
     createdAt: "2026-07-19T00:00:00.000Z",
     updatedAt: "2026-07-19T00:00:00.000Z",
   }
@@ -160,6 +162,51 @@ describe("chat response correlation", () => {
     })
   })
 
+  it("mantém o domínio explícito nas sequências Supino e Maçã, inclusive após reload", () => {
+    const supino = {
+      ...context("ctx-supino", "workout", "supino_reto_maquina"),
+      currentItem: { id: "supino_reto_maquina", name: "Supino reto máquina" },
+    }
+    assert.match(buildGutoModelInputWithActiveContext("ocupado", supino), /ACTIVE WORKOUT CONTEXT/)
+    assert.equal(buildGutoLastSuggestedItem(supino), null)
+
+    const treinoDepoisDaPrimeiraTroca = {
+      ...supino,
+      version: 2,
+      currentItem: { id: "crucifixo_maquina", name: "Crucifixo máquina" },
+      lastSuggestedItem: { id: "crucifixo_maquina", name: "Crucifixo máquina" },
+    }
+    const treinoReidratado = JSON.parse(JSON.stringify(treinoDepoisDaPrimeiraTroca)) as ActiveContext
+    assert.match(buildGutoModelInputWithActiveContext("tbm nao tenho", treinoReidratado), /ACTIVE WORKOUT CONTEXT/)
+    assert.deepEqual(buildGutoLastSuggestedItem(treinoReidratado), {
+      id: "crucifixo_maquina",
+      name: "Crucifixo máquina",
+      kind: "exercise",
+    })
+
+    const maca = {
+      ...context("ctx-maca", "diet", "apple"),
+      currentItem: { id: "apple", name: "Maçã", quantity: "2 unidades", mealName: "Lanche da manhã" },
+    }
+    assert.match(buildGutoModelInputWithActiveContext("não tenho", maca), /ACTIVE DIET CONTEXT/)
+    assert.equal(buildGutoLastSuggestedItem(maca), null)
+
+    const dietaDepoisDaPrimeiraTroca = {
+      ...maca,
+      version: 2,
+      currentItem: { id: "banana", name: "Banana", quantity: "2 unidades", mealName: "Lanche da manhã" },
+      lastSuggestedItem: { id: "banana", name: "Banana", quantity: "2 unidades" },
+    }
+    const dietaReidratada = JSON.parse(JSON.stringify(dietaDepoisDaPrimeiraTroca)) as ActiveContext
+    assert.match(buildGutoModelInputWithActiveContext("tbm nao tenho", dietaReidratada), /ACTIVE DIET CONTEXT/)
+    assert.doesNotMatch(buildGutoModelInputWithActiveContext("tbm nao tenho", dietaReidratada), /WORKOUT/)
+    assert.deepEqual(buildGutoLastSuggestedItem(dietaReidratada), {
+      id: "banana",
+      name: "Banana",
+      kind: "food",
+    })
+  })
+
   it("o turno pendente preserva e envia o campo estruturado separado do texto", () => {
     const source = readFileSync(
       new URL("../components/guto/tabs/chat-tab.tsx", import.meta.url),
@@ -167,6 +214,10 @@ describe("chat response correlation", () => {
     )
     assert.match(source, /lastSuggestedItem:\s*buildGutoLastSuggestedItem\(activeContextSnapshot\)/)
     assert.match(source, /lastSuggestedItem:\s*nextPendingTurn\.lastSuggestedItem\s*\|\|\s*null/)
+    assert.match(source, /contextId:\s*nextPendingTurn\.contextId/)
+    assert.match(source, /activeContextType:\s*nextPendingTurn\.activeContextType/)
+    assert.match(source, /activeItemId:\s*nextPendingTurn\.activeItemId/)
+    assert.match(source, /setGutoActiveContext\(nextContext\)/)
     assert.doesNotMatch(source, /Last confirmed substitute:/)
   })
 })
