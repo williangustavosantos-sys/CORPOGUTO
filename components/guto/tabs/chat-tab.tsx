@@ -1479,16 +1479,8 @@ export function ChatTab({
           ? pendingExpectedResponseRef.current
           : null
 
-      const fallbackName: Record<SupportedLanguage, string> = {
-        "pt-BR": "Usuário",
-        "en-US": "User",
-        "it-IT": "Utente",
-      }
-
       const data = await sendGutoMessage({
-        profile: { name: userName || fallbackName[safeLanguage], userId },
         input: nextPendingTurn.modelInput,
-        language: safeLanguage,
         history: messagesRef.current.slice(-6).map((message) => ({
           role: message.isGuto ? "model" : "user",
           parts: [{ text: message.text }],

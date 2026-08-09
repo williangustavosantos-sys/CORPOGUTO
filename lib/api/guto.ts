@@ -223,15 +223,7 @@ export interface ActiveConversationContext {
 }
 
 export interface SendGutoMessageRequest {
-  profile: {
-    name: string
-    userId?: string
-    streak?: number
-    trainedToday?: boolean
-    energyLast?: string
-  }
   input: string
-  language: SupportedLanguage
   history: {
     role: "user" | "model"
     parts: { text: string }[]
