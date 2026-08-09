@@ -84,9 +84,15 @@ export interface GutoLastSuggestedItem {
 }
 export type GutoAction =
   | "none"
+  | "askClarification"
   | "updateWorkout"
   | "generateDiet"
+  | "generateWorkout"
   | "swapExercise"
+  | "swapFood"
+  | "startMinimumMission"
+  | "acknowledge"
+  | "callSafetyPath"
   | "openProactiveCard"
   | "callCoach"
   | "lock"
@@ -232,6 +238,8 @@ export interface ActiveConversationContext {
 }
 
 export interface SendGutoMessageRequest {
+  /** Texto visivel original. O V3 nunca recebe o contexto enriquecido pelo navegador. */
+  message: string
   input: string
   history: {
     role: "user" | "model"
@@ -299,6 +307,85 @@ export interface SendGutoMessageResponse {
   memoryPatch?: Partial<GutoMemory>
   proactiveMemoryAction?: GutoProactiveMemoryAction | null
   turnDecision?: GutoAtomicTurnDecision
+  brainVersion?: "guto-cerebro-v3"
+  traceId?: string
+  execution?: GutoV3Execution
+  versions?: GutoV3Versions
+}
+
+export interface GutoV3Execution {
+  status: "confirmed" | "not_executed" | "rejected"
+  code: string
+  message: string
+  planVersion?: number
+  activeContextVersion?: number
+}
+
+export interface GutoV3Versions {
+  memoryVersion: number
+  activeContextVersion: number | null
+  planVersion: number | null
+}
+
+export interface GutoV3TurnResponse {
+  speech: string
+  action: GutoAction
+  requestId: string
+  traceId: string
+  brainVersion: "guto-cerebro-v3"
+  execution: GutoV3Execution
+  versions: GutoV3Versions
+}
+
+export interface GutoV3ActiveContext {
+  id: string
+  version: number
+  kind: "workout" | "diet"
+  planId: string
+  planVersion: number
+  itemId: string
+  itemLabel: string
+  rejectedCandidateIds?: string[]
+  updatedAt: string
+}
+
+export interface GutoV3StateResponse {
+  brainVersion: "guto-cerebro-v3"
+  requestId: string
+  traceId: string
+  snapshot: {
+    memoryVersion: number
+    profile: Record<string, unknown>
+    goal: Record<string, unknown>
+    preferences: Record<string, unknown>
+    healthConstraints: Array<Record<string, unknown>>
+    workout: Record<string, unknown> | null
+    diet: Record<string, unknown> | null
+  }
+  activeContext: GutoV3ActiveContext | null
+}
+
+export interface GutoV3CalibrationRequest {
+  requestId: string
+  profile: {
+    biologicalSex: "male" | "female" | "other" | "prefer_not_to_say"
+    age: number
+    weightKg: number
+    heightCm: number
+    trainingStatus: "beginner" | "returning" | "active" | "advanced"
+    trainingLocation: string
+    city: string
+    country: string
+    language: SupportedLanguage
+  }
+  goal: { code: string }
+  preferences: { dietStyle?: string }
+  healthConstraints: Array<{
+    kind: "limitation" | "injury" | "illness" | "allergy" | "food_restriction"
+    bodyRegion?: string
+    description: string
+    severity?: "low" | "medium" | "high" | "unknown"
+  }>
 }
 
 export interface GutoNameValidation {
@@ -478,10 +565,76 @@ export interface DietPlan {
   updatedAt?: string
 }
 
+export function isGutoV3Enabled(): boolean {
+  return process.env.NEXT_PUBLIC_GUTO_V3_ENABLED === "true"
+}
+
 export async function sendGutoMessage(payload: SendGutoMessageRequest) {
+  if (isGutoV3Enabled()) {
+    const result = await apiRequest<GutoV3TurnResponse>("/guto/v3", {
+      method: "POST",
+      timeoutMs: 35000,
+      body: JSON.stringify({
+        message: payload.message,
+        requestId: payload.requestId,
+        ...(payload.contextId ? { uiContextId: payload.contextId } : {}),
+      }),
+    })
+    return {
+      turnId: payload.turnId,
+      requestId: result.requestId,
+      contextId: payload.contextId || undefined,
+      fala: result.speech,
+      acao: result.action,
+      brainVersion: result.brainVersion,
+      traceId: result.traceId,
+      execution: result.execution,
+      versions: result.versions,
+    } satisfies SendGutoMessageResponse
+  }
+
   return apiRequest<SendGutoMessageResponse>("/guto", {
     method: "POST",
     timeoutMs: 35000,
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getGutoV3State(requestId: string) {
+  return apiRequest<GutoV3StateResponse>("/guto/v3/state", {
+    method: "GET",
+    headers: { "x-request-id": requestId },
+  })
+}
+
+export async function saveGutoV3Calibration(payload: GutoV3CalibrationRequest) {
+  return apiRequest<{
+    status: "confirmed"
+    requestId: string
+    profileVersion: number
+    memoryVersion: number
+    brainVersion: "guto-cerebro-v3"
+    traceId: string
+  }>("/guto/v3/calibration", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function setGutoV3ActiveContext(payload: {
+  requestId: string
+  expectedVersion: number | null
+  kind: "workout" | "diet"
+  planId: string
+  itemId: string
+}) {
+  return apiRequest<{
+    requestId: string
+    traceId: string
+    brainVersion: "guto-cerebro-v3"
+    activeContext: GutoV3ActiveContext
+  }>("/guto/v3/active-context", {
+    method: "POST",
     body: JSON.stringify(payload),
   })
 }

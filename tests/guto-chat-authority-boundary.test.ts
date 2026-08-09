@@ -26,6 +26,7 @@ describe("fronteira de autoridade do chat", () => {
 
     assert.doesNotMatch(requestContract, /\bprofile\s*[?:]:/)
     assert.doesNotMatch(requestContract, /\blanguage\s*[?:]:/)
+    assert.match(requestContract, /\bmessage:\s*string/)
     assert.match(requestContract, /\binput:\s*string/)
     assert.match(requestContract, /\brequestId:\s*string/)
   })
@@ -39,9 +40,31 @@ describe("fronteira de autoridade do chat", () => {
 
     assert.doesNotMatch(chatRequest, /\bprofile\s*:/)
     assert.doesNotMatch(chatRequest, /\blanguage\s*:/)
+    assert.match(chatRequest, /\bmessage:\s*nextPendingTurn\.displayText/)
     assert.match(chatRequest, /\binput:\s*nextPendingTurn\.modelInput/)
     assert.match(chatRequest, /\bhistory:\s*messagesRef\.current/)
     assert.match(chatRequest, /\brequestId:\s*nextPendingTurn\.requestId/)
     assert.match(chatRequest, /\bcontextVersion:\s*nextPendingTurn\.contextVersion/)
+  })
+
+  it("no V3 transmite somente texto original e correlacao, sem historico ou estado oficial", () => {
+    const v3Branch = sourceBetween(
+      apiSource,
+      "if (isGutoV3Enabled()) {",
+      "return apiRequest<SendGutoMessageResponse>",
+    )
+
+    const v3Body = sourceBetween(
+      v3Branch,
+      "body: JSON.stringify({",
+      "}),",
+    )
+
+    assert.match(v3Branch, /apiRequest<GutoV3TurnResponse>\("\/guto\/v3"/)
+    assert.match(v3Body, /message:\s*payload\.message/)
+    assert.match(v3Body, /requestId:\s*payload\.requestId/)
+    assert.doesNotMatch(v3Body, /payload\.input/)
+    assert.doesNotMatch(v3Body, /payload\.history/)
+    assert.doesNotMatch(v3Body, /profile|language|workoutPlan|dietPlan/)
   })
 })

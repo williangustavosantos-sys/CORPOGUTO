@@ -1480,6 +1480,7 @@ export function ChatTab({
           : null
 
       const data = await sendGutoMessage({
+        message: nextPendingTurn.displayText,
         input: nextPendingTurn.modelInput,
         history: messagesRef.current.slice(-6).map((message) => ({
           role: message.isGuto ? "model" : "user",

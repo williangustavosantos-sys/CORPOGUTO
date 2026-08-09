@@ -28,8 +28,10 @@ async function proxyToBackend(request: NextRequest, context: RouteContext) {
   const headers = new Headers()
   const contentType = request.headers.get("content-type")
   const authorization = request.headers.get("authorization")
+  const requestId = request.headers.get("x-request-id")
   if (contentType) headers.set("content-type", contentType)
   if (authorization) headers.set("authorization", authorization)
+  if (requestId) headers.set("x-request-id", requestId)
 
   const hasBody = !["GET", "HEAD"].includes(request.method)
   const upstream = await fetch(target, {
@@ -41,7 +43,9 @@ async function proxyToBackend(request: NextRequest, context: RouteContext) {
 
   const responseHeaders = new Headers()
   const upstreamContentType = upstream.headers.get("content-type")
+  const traceId = upstream.headers.get("x-guto-trace-id")
   if (upstreamContentType) responseHeaders.set("content-type", upstreamContentType)
+  if (traceId) responseHeaders.set("x-guto-trace-id", traceId)
 
   return new Response(upstream.body, {
     status: upstream.status,
