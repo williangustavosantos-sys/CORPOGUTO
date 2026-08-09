@@ -820,6 +820,7 @@ export function GutoApp({
   const [inviteLoading, setInviteLoading] = useState(false)
 
   const timersRef = useRef<number[]>([])
+  const inviteTransitionTimersRef = useRef<number[]>([])
   const pactIntervalRef = useRef<number | null>(null)
   const introSafetyTimerRef = useRef<number | null>(null)
   const introFinishedRef = useRef(false)
@@ -848,6 +849,21 @@ export function GutoApp({
   const clearScheduled = useCallback(() => {
     timersRef.current.forEach((timer) => window.clearTimeout(timer))
     timersRef.current = []
+  }, [])
+
+  // O login dispara uma nova hidratação. Esse timer precisa sobreviver ao cleanup
+  // dos efeitos de hidratação, senão o convite confirma mas nunca chega ao naming.
+  const scheduleInviteTransition = useCallback((callback: () => void, delay: number) => {
+    const timer = window.setTimeout(() => {
+      inviteTransitionTimersRef.current = inviteTransitionTimersRef.current.filter((id) => id !== timer)
+      callback()
+    }, delay)
+    inviteTransitionTimersRef.current.push(timer)
+  }, [])
+
+  useEffect(() => () => {
+    inviteTransitionTimersRef.current.forEach((timer) => window.clearTimeout(timer))
+    inviteTransitionTimersRef.current = []
   }, [])
 
   const clearPactInterval = useCallback(() => {
@@ -2230,7 +2246,7 @@ export function GutoApp({
       setInviteSuccess(true)
       clearPendingInviteStorage()
       setPendingInviteToken(null)
-      schedule(() => {
+      scheduleInviteTransition(() => {
         login({ ...res, role: res.role ?? "student" })
         const inviteResolvedName = firstRealGutoName(res.name, inviteClaimData?.name)
         setGutoUserId(res.userId)
@@ -2253,7 +2269,7 @@ export function GutoApp({
       setInviteError(ic.activationFailed)
       setInviteSubmitting(false)
     }
-  }, [pendingInviteToken, inviteSubmitting, selectedLanguage, invitePassword, inviteConfirmPassword, inviteClaimData, login, router, schedule])
+  }, [pendingInviteToken, inviteSubmitting, selectedLanguage, invitePassword, inviteConfirmPassword, inviteClaimData, login, router, scheduleInviteTransition])
 
   const handleExerciseQuestion = useCallback((exercise: MissionExercise) => {
     setPendingExerciseQuestion({

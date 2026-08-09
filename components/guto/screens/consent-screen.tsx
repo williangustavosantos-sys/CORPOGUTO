@@ -204,6 +204,7 @@ export function ConsentScreen({ language = "pt-BR", onComplete, errorMessage }: 
           {t.checkTerms}{" "}
           <Link
             href={`/terms?lang=${safeLanguage}`}
+            prefetch={false}
             className="font-semibold underline"
             style={{ color: "var(--guto-navy)" }}
             onClick={(e) => e.stopPropagation()}
@@ -213,6 +214,7 @@ export function ConsentScreen({ language = "pt-BR", onComplete, errorMessage }: 
           {t.and}{" "}
           <Link
             href={`/privacy?lang=${safeLanguage}`}
+            prefetch={false}
             className="font-semibold underline"
             style={{ color: "var(--guto-navy)" }}
             onClick={(e) => e.stopPropagation()}
