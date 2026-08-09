@@ -1,4 +1,5 @@
 import { apiRequest, ApiError } from "./client"
+import { assertValidGutoUserId } from "../guto-user-id"
 
 export type SupportedLanguage = "pt-BR" | "it-IT" | "en-US"
 export type WorkoutLocationMode = "gym" | "home" | "park"
@@ -542,13 +543,15 @@ export async function saveGutoMemory(payload: {
   initialXpRewardSeen?: boolean
   lastWorkoutPlan?: GutoWorkoutPlan | null
 }) {
+  assertValidGutoUserId(payload.userId)
   return apiRequest<GutoMemory>("/guto/memory", {
     method: "POST",
     body: JSON.stringify(payload),
   })
 }
 
-export async function getGutoMemory() {
+export async function getGutoMemory(userId: unknown) {
+  assertValidGutoUserId(userId)
   return apiRequest<GutoMemory>(`/guto/memory`, {
     method: "GET",
     suppressAuthRedirect: true,

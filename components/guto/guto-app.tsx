@@ -46,6 +46,8 @@ import {
 import { getWorkoutMissingFields, localizeGutoWorkoutPlan } from "@/lib/workout-plan"
 import { resolveWorkoutValidationLocationMode } from "@/lib/workout-location"
 import { clearVolatileGutoStorage } from "@/lib/guto-local-state"
+import { applyIfLatestMemoryWrite } from "@/lib/guto-memory-write-order"
+import { isValidGutoUserId } from "@/lib/guto-user-id"
 
 type AppStage = "intro" | "language" | "invite_claim" | "consent" | "naming" | "calibration" | "pact" | "system" | "settings"
 type SettingsMode = "menu" | "language" | "name" | "data" | "profile" | "goal" | "location" | "pathology" | "physicaldata" | "residence" | "food_restrictions" | "privacy"
@@ -828,6 +830,7 @@ export function GutoApp({
   const portalVideoRef = useRef<HTMLVideoElement | null>(null)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const memoryRef = useRef<GutoMemory | null>(null)
+  const latestMemoryWriteRef = useRef(0)
   const effectRegistry = useMemo(() => createGutoEffectRegistry(), [])
 
   useEffect(() => {
@@ -895,10 +898,14 @@ export function GutoApp({
 
   const persistMemory = useCallback(
     async (payload: GutoMemoryPayload, options?: { optimistic?: boolean }) => {
+      const activeUserId = isValidGutoUserId(gutoUserId) ? gutoUserId : user?.userId
+      if (!isValidGutoUserId(activeUserId)) return null
+
+      const writeId = ++latestMemoryWriteRef.current
       const shouldOptimisticallyUpdate = options?.optimistic !== false
       const memoryBeforeSave = memoryRef.current
       const rollbackOptimisticUpdate = () => {
-        if (shouldOptimisticallyUpdate) {
+        if (shouldOptimisticallyUpdate && writeId === latestMemoryWriteRef.current) {
           memoryRef.current = memoryBeforeSave
           setMemory(memoryBeforeSave)
         }
@@ -910,20 +917,22 @@ export function GutoApp({
         setMemory(optimisticMemory)
       }
 
-      if (!user?.userId) {
-        rollbackOptimisticUpdate()
-        return null
-      }
-
       try {
         const updated = await saveGutoMemory({
-          userId: gutoUserId,
           language: selectedLanguage,
           ...payload,
+          userId: activeUserId,
         })
-        memoryRef.current = updated
-        setMemory(updated)
-        return updated
+        const applied = applyIfLatestMemoryWrite(
+          writeId,
+          latestMemoryWriteRef.current,
+          updated,
+          (latest) => {
+            memoryRef.current = latest
+            setMemory(latest)
+          },
+        )
+        return applied ? updated : null
       } catch (error) {
         rollbackOptimisticUpdate()
         console.warn(`Memória do GUTO não sincronizada: ${getApiErrorMessage(error)}`)
@@ -1119,7 +1128,7 @@ export function GutoApp({
 
         let loadedMemory: GutoMemory | null = null
         try {
-          loadedMemory = await getGutoMemory()
+          loadedMemory = await getGutoMemory(currentUserId)
         } catch {
           loadedMemory = null
         }
@@ -1336,11 +1345,6 @@ export function GutoApp({
       }).catch((error) => {
         console.warn(`Pacto do GUTO sincronizado em segundo plano: ${getApiErrorMessage(error)}`)
       })
-      schedule(() => {
-        void getGutoMemory().then((fresh) => {
-          if (fresh) setMemory(fresh)
-        }).catch(() => {})
-      }, 1200)
     },
     [effectRegistry, persistMemory, persistProfile, schedule, setMemory, trackBehaviorEvent]
   )
@@ -1381,7 +1385,7 @@ export function GutoApp({
     const currentUser = user
     let cancelled = false
 
-    void getGutoMemory()
+    void getGutoMemory(currentUser.userId)
       .then((fresh) => {
         if (cancelled || !hasMemoryConsent(fresh)) return
         memoryRef.current = fresh
@@ -2139,7 +2143,7 @@ export function GutoApp({
     if (!user?.userId) return
     let cancelled = false
 
-    void getGutoMemory()
+    void getGutoMemory(user.userId)
       .then((memory) => {
         if (cancelled) return
         setMemory(memory)
@@ -3773,7 +3777,7 @@ export function GutoApp({
                 setShowValidationFlow(false)
                 setActiveTab("caminho")
                 // Refresh full memory so totalXp, trainedToday, streak sync everywhere
-                getGutoMemory().then((fresh) => {
+                getGutoMemory(gutoUserId).then((fresh) => {
                   if (fresh) setMemory(fresh)
                 }).catch(() => {})
                 // Tell ArenaTab to refetch rankings
