@@ -14,6 +14,7 @@ import {
   generateDietPlan,
   getGutoProactive,
   getProactiveMemories,
+  isGutoV3Enabled,
   requestDiscardProactiveMemory,
   sendGutoMessage,
   setGutoActiveContext,
@@ -1540,7 +1541,7 @@ export function ChatTab({
       }
 
       setMessages((prev) => appendMessagesWithoutDuplicateGuto(prev, [gutoMessage]))
-      if (data?.acao === "updateWorkout" && data?.workoutPlan) {
+      if (data?.workoutPlan) {
         onWorkoutPlanUpdated?.(data.workoutPlan)
       }
       const patchHasProactiveMemories = applyProactiveMemoriesFromPatch(data?.memoryPatch)
@@ -1562,7 +1563,7 @@ export function ChatTab({
         void refreshProactiveMemories()
       }
       stopTypingLoop()
-      const closedWorkoutFlow = data?.acao === "updateWorkout" || Boolean(data?.workoutPlan)
+      const closedWorkoutFlow = data?.acao === "updateWorkout" || data?.acao === "swapExercise" || Boolean(data?.workoutPlan)
       const dietReadyFromBackend = data?.memoryPatch?.dietGenerationStatus === "ready_to_generate"
       if (closedWorkoutFlow) {
         suppressProactivityUntilRef.current = Date.now() + PROACTIVITY_SUPPRESS_AFTER_WORKOUT_MS
@@ -1663,7 +1664,9 @@ export function ChatTab({
     const item = {
       id: exercise.id,
       name: exercise.name,
-      workoutId: workoutPlan?.dateLabel || workoutPlan?.title || "current_workout",
+      workoutId: isGutoV3Enabled()
+        ? workoutPlan?.studentId || ""
+        : workoutPlan?.dateLabel || workoutPlan?.title || "current_workout",
       position: workoutPlan?.exercises.findIndex((candidate) => candidate.id === exercise.id),
       sets: exercise.sets,
       reps: String(exercise.reps),
@@ -1735,11 +1738,12 @@ export function ChatTab({
     setContextChip({ type: "meal", label: food.name })
     const now = new Date().toISOString()
     const item = {
-      id: normalizeActiveContextItemId(food.name),
+      id: isGutoV3Enabled() && food.id ? food.id : normalizeActiveContextItemId(food.name),
       name: food.name,
       mealId: meal.id,
       mealName: meal.name,
       quantity: food.quantity,
+      workoutId: isGutoV3Enabled() ? food.planId : undefined,
     }
     const nextContext: ActiveContext = {
       id: createGutoTurnId(userId),

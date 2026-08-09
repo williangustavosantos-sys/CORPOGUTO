@@ -353,14 +353,101 @@ export interface GutoV3StateResponse {
   brainVersion: "guto-cerebro-v3"
   requestId: string
   traceId: string
-  snapshot: {
+  state: {
+    actor: { tenantId: string; userId: string; externalSubject: string; role: string }
     memoryVersion: number
-    profile: Record<string, unknown>
-    goal: Record<string, unknown>
-    preferences: Record<string, unknown>
-    healthConstraints: Array<Record<string, unknown>>
-    workout: Record<string, unknown> | null
-    diet: Record<string, unknown> | null
+    displayName: string
+    journey: {
+      preferredLanguage: SupportedLanguage
+      consentAcceptedAt: string | null
+      sovereignNameConfirmedAt: string | null
+      pactAcceptedAt: string | null
+      initialXpRewardSeen: boolean
+    }
+    profile: null | {
+      version: number
+      displayName?: string
+      language: SupportedLanguage
+      city: string
+      country: string
+      biologicalSex: string
+      age: number
+      weightKg: number
+      heightCm: number
+      trainingStatus: string
+      trainingLocation: string
+    }
+    goal: null | { version: number; code: string }
+    preferences: { version: number; dietStyle?: string }
+    healthConstraints: Array<{
+      id: string
+      kind: "limitation" | "injury" | "illness" | "allergy" | "food_restriction"
+      bodyRegion?: string
+      description: string
+      severity: string
+      confirmed: boolean
+    }>
+    workout: null | {
+      id: string
+      version: number
+      title: string
+      status: string
+      items: Array<{
+        id: string
+        exerciseId: string
+        name: string
+        canonicalNamePt?: string
+        purpose: string
+        muscleGroup: string
+        position: number
+        sets?: number
+        reps?: string
+        rest?: string
+        cue?: string
+        note?: string
+        videoUrl?: string
+        sourceFileName?: string
+      }>
+    }
+    diet: null | {
+      id: string
+      version: number
+      status: string
+      totalCalories: number
+      proteinGrams: number
+      carbsGrams: number
+      fatGrams: number
+      meals: Array<{
+        id: string
+        name: string
+        position: number
+        calories: number
+        items: Array<{
+          id: string
+          foodId: string
+          name: string
+          quantityGrams: number
+          calories: number
+          proteinGrams: number
+          carbsGrams: number
+          fatGrams: number
+          position: number
+        }>
+      }>
+    }
+    progression: {
+      totalXp: number
+      evolutionStage: "baby" | "teen" | "adult" | "elite"
+      trainedToday: boolean
+      adaptedMissionToday: boolean
+      xpEvents: Array<{
+        id: string
+        reasonCode: "grant_initial_xp" | "complete_daily_mission" | "accept_adapted_mission" | "apply_daily_miss_penalty" | "legacy_balance_migration"
+        amount: number
+        sourceKey: string
+        createdAt: string
+      }>
+    }
   }
   activeContext: GutoV3ActiveContext | null
 }
@@ -522,6 +609,8 @@ export interface DietMacros {
 }
 
 export interface DietFood {
+  id?: string
+  planId?: string
   name: string
   quantity: string
   kcal: number
@@ -565,6 +654,181 @@ export interface DietPlan {
   updatedAt?: string
 }
 
+function createV3RequestId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID()
+  const bytes = new Uint8Array(16)
+  if (typeof globalThis.crypto?.getRandomValues === "function") {
+    globalThis.crypto.getRandomValues(bytes)
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256)
+    }
+  }
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function v3WorkoutToLegacy(state: GutoV3StateResponse["state"]): GutoWorkoutPlan | null {
+  const plan = state.workout
+  if (!plan) return null
+  const today = new Date().toISOString().slice(0, 10)
+  return {
+    studentId: plan.id,
+    title: plan.title,
+    focus: state.goal?.code || "full_body",
+    focusKey: "full_body",
+    goal: state.goal?.code,
+    location: state.profile?.trainingLocation,
+    locationMode: state.profile?.trainingLocation === "home" || state.profile?.trainingLocation === "park"
+      ? state.profile.trainingLocation
+      : "gym",
+    dateLabel: today,
+    scheduledFor: today,
+    summary: plan.title,
+    exercises: plan.items.map((item) => ({
+      id: item.id,
+      name: item.name,
+      canonicalNamePt: item.canonicalNamePt || item.name,
+      muscleGroup: item.muscleGroup,
+      sets: item.sets || 1,
+      reps: item.reps || "10-12",
+      rest: item.rest || "1:30min",
+      cue: item.cue || "Executa com controle e sem dor.",
+      note: item.note || "A técnica manda.",
+      videoUrl: item.videoUrl || "",
+      videoProvider: "local" as const,
+      sourceFileName: item.sourceFileName || "",
+      order: item.position,
+    })),
+    planSource: "ai_generated",
+    source: "guto_generated",
+  }
+}
+
+function v3DietToLegacy(state: GutoV3StateResponse["state"]): DietPlan | null {
+  const plan = state.diet
+  if (!plan) return null
+  return {
+    userId: plan.id,
+    title: "Dieta oficial GUTO",
+    language: state.profile?.language || state.journey.preferredLanguage,
+    generatedAt: new Date().toISOString(),
+    country: state.profile?.country || "",
+    goal: state.goal?.code,
+    macros: {
+      bmr: 0,
+      tdee: plan.totalCalories,
+      targetKcal: plan.totalCalories,
+      proteinG: plan.proteinGrams,
+      carbsG: plan.carbsGrams,
+      fatG: plan.fatGrams,
+      goal: state.goal?.code || "consistency",
+    },
+    meals: plan.meals.map((meal) => ({
+      id: meal.id,
+      name: meal.name,
+      time: "",
+      totalKcal: meal.calories,
+      gutoNote: "Valores confirmados pelo Cérebro V3.",
+      foods: meal.items.map((item) => ({
+        id: item.id,
+        planId: plan.id,
+        name: item.name,
+        quantity: `${item.quantityGrams} g`,
+        kcal: item.calories,
+        proteinG: item.proteinGrams,
+        carbsG: item.carbsGrams,
+        fatG: item.fatGrams,
+      })),
+    })),
+    planSource: "ai_generated",
+    source: "guto_generated",
+  }
+}
+
+function v3ActiveContextToLegacy(context: GutoV3ActiveContext | null): ActiveContext | null {
+  if (!context) return null
+  const item: ActiveContextItem = {
+    id: context.itemId,
+    name: context.itemLabel,
+    workoutId: context.planId,
+  }
+  return {
+    id: context.id,
+    version: context.version,
+    type: context.kind,
+    sourceSurface: context.kind === "workout" ? "mission" : "diet",
+    originalItem: item,
+    currentItem: item,
+    lastSuggestedItem: null,
+    rejectedItems: (context.rejectedCandidateIds || []).map((id) => ({ id, name: id })),
+    acceptedItem: null,
+    createdAt: context.updatedAt,
+    updatedAt: context.updatedAt,
+  }
+}
+
+export function gutoV3StateToMemory(response: GutoV3StateResponse): GutoMemory {
+  const { state } = response
+  const profile = state.profile
+  const workout = v3WorkoutToLegacy(state)
+  const diet = v3DietToLegacy(state)
+  const limitations = state.healthConstraints.filter((item) => item.kind !== "food_restriction").map((item) => item.description).join("; ")
+  const foodRestrictions = state.healthConstraints.filter((item) => item.kind === "food_restriction").map((item) => item.description).join("; ")
+  const xpEvents = state.progression.xpEvents.map((event) => ({
+    id: event.id,
+    type: event.reasonCode === "legacy_balance_migration" ? "grant_initial_xp" as const : event.reasonCode,
+    amount: event.amount,
+    date: /^\d{4}-\d{2}-\d{2}$/.test(event.sourceKey) ? event.sourceKey : event.createdAt.slice(0, 10),
+    createdAt: event.createdAt,
+  }))
+  const completedWorkoutDates = xpEvents.filter((event) => event.type === "complete_daily_mission").map((event) => event.date)
+  const adaptedMissionDates = xpEvents.filter((event) => event.type === "accept_adapted_mission").map((event) => event.date)
+  const missedMissionDates = xpEvents.filter((event) => event.type === "apply_daily_miss_penalty").map((event) => event.date)
+  const initialXpGranted = Boolean(state.journey.pactAcceptedAt || xpEvents.some((event) => event.type === "grant_initial_xp"))
+  return {
+    userId: state.actor.externalSubject,
+    name: state.displayName,
+    sovereignNameConfirmedAt: state.journey.sovereignNameConfirmedAt || undefined,
+    language: profile?.language || state.journey.preferredLanguage,
+    initialXpGranted,
+    totalXp: state.progression.totalXp,
+    streak: completedWorkoutDates.length,
+    trainedToday: state.progression.trainedToday,
+    adaptedMissionToday: state.progression.adaptedMissionToday,
+    lastActiveAt: new Date().toISOString(),
+    trainingLocation: profile?.trainingLocation,
+    trainingStatus: profile?.trainingStatus,
+    trainingLimitations: limitations || undefined,
+    userAge: profile?.age,
+    biologicalSex: profile?.biologicalSex === "male" || profile?.biologicalSex === "female" ? profile.biologicalSex : undefined,
+    trainingLevel: profile?.trainingStatus === "active" ? "consistent" : profile?.trainingStatus as GutoMemory["trainingLevel"],
+    trainingGoal: state.goal?.code as GutoMemory["trainingGoal"],
+    preferredTrainingLocation: profile?.trainingLocation === "home" || profile?.trainingLocation === "park" || profile?.trainingLocation === "mixed" ? profile.trainingLocation : profile ? "gym" : undefined,
+    trainingPathology: limitations || undefined,
+    country: profile?.country,
+    city: profile?.city,
+    heightCm: profile?.heightCm,
+    weightKg: profile?.weightKg,
+    foodRestrictions: foodRestrictions || state.preferences.dietStyle,
+    consentHealthFitness: Boolean(state.journey.consentAcceptedAt),
+    acceptedTerms: Boolean(state.journey.consentAcceptedAt),
+    consentAcceptedAt: state.journey.consentAcceptedAt || undefined,
+    completedWorkoutDates,
+    adaptedMissionDates,
+    missedMissionDates,
+    xpEvents,
+    lastWorkoutPlan: workout,
+    lastDietPlan: diet,
+    activeContext: v3ActiveContextToLegacy(response.activeContext),
+    dietGenerationStatus: diet ? "generated" : profile ? "ready_to_generate" : "idle",
+    proactiveSent: {},
+    initialXpRewardSeen: state.journey.initialXpRewardSeen,
+  }
+}
+
 export function isGutoV3Enabled(): boolean {
   return process.env.NEXT_PUBLIC_GUTO_V3_ENABLED === "true"
 }
@@ -580,6 +844,12 @@ export async function sendGutoMessage(payload: SendGutoMessageRequest) {
         ...(payload.contextId ? { uiContextId: payload.contextId } : {}),
       }),
     })
+    // A UI só recebe o novo plano depois que o Executor e os stores V3
+    // confirmaram a mutação. O GET é uma reconciliação da autoridade oficial,
+    // não uma segunda fonte de estado no navegador.
+    const refreshed = result.execution.status === "confirmed"
+      ? gutoV3StateToMemory(await getGutoV3State(payload.requestId))
+      : null
     return {
       turnId: payload.turnId,
       requestId: result.requestId,
@@ -590,6 +860,15 @@ export async function sendGutoMessage(payload: SendGutoMessageRequest) {
       traceId: result.traceId,
       execution: result.execution,
       versions: result.versions,
+      ...(refreshed
+        ? {
+            activeContext: refreshed.activeContext || null,
+            memoryPatch: refreshed,
+            ...((result.action === "swapExercise" || result.action === "generateWorkout") && refreshed.lastWorkoutPlan
+              ? { workoutPlan: refreshed.lastWorkoutPlan }
+              : {}),
+          }
+        : {}),
     } satisfies SendGutoMessageResponse
   }
 
@@ -635,11 +914,34 @@ export async function setGutoV3ActiveContext(payload: {
     activeContext: GutoV3ActiveContext
   }>("/guto/v3/active-context", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, clear: false }),
   })
 }
 
 export async function setGutoActiveContext(context: ActiveContext | null) {
+  if (isGutoV3Enabled()) {
+    const state = await getGutoV3State(createV3RequestId())
+    const expectedVersion = state.activeContext?.version ?? null
+    const result = await apiRequest<{
+      requestId: string
+      traceId: string
+      brainVersion: "guto-cerebro-v3"
+      activeContext: GutoV3ActiveContext | null
+    }>("/guto/v3/active-context", {
+      method: "POST",
+      body: JSON.stringify(context
+        ? {
+            requestId: createV3RequestId(),
+            clear: false,
+            expectedVersion,
+            kind: context.type,
+            planId: context.currentItem.workoutId || (context.type === "workout" ? state.state.workout?.id : state.state.diet?.id),
+            itemId: context.currentItem.id,
+          }
+        : { requestId: createV3RequestId(), clear: true, expectedVersion }),
+    })
+    return v3ActiveContextToLegacy(result.activeContext)
+  }
   const result = await apiRequest<{ ok: true; activeContext: ActiveContext | null }>("/guto/active-context", {
     method: "POST",
     body: JSON.stringify({ context }),
@@ -698,6 +1000,14 @@ export async function saveGutoMemory(payload: {
   lastWorkoutPlan?: GutoWorkoutPlan | null
 }) {
   assertValidGutoUserId(payload.userId)
+  if (isGutoV3Enabled()) {
+    const result = await apiRequest<GutoV3StateResponse>("/guto/v3/memory", {
+      method: "POST",
+      timeoutMs: GUTO_MEMORY_IO_TIMEOUT_MS,
+      body: JSON.stringify({ ...payload, userId: undefined, lastWorkoutPlan: undefined, requestId: createV3RequestId() }),
+    })
+    return gutoV3StateToMemory(result)
+  }
   return apiRequest<GutoMemory>("/guto/memory", {
     method: "POST",
     timeoutMs: GUTO_MEMORY_IO_TIMEOUT_MS,
@@ -707,6 +1017,7 @@ export async function saveGutoMemory(payload: {
 
 export async function getGutoMemory(userId: unknown) {
   assertValidGutoUserId(userId)
+  if (isGutoV3Enabled()) return gutoV3StateToMemory(await getGutoV3State(createV3RequestId()))
   return apiRequest<GutoMemory>(`/guto/memory`, {
     method: "GET",
     timeoutMs: GUTO_MEMORY_IO_TIMEOUT_MS,
@@ -717,6 +1028,13 @@ export async function getGutoMemory(userId: unknown) {
 // Fase 2A — persiste o ACEITE de consentimento no backend (fonte de verdade).
 // Retorna a memória atualizada (com consentHealthFitness/acceptedTerms/consentAcceptedAt).
 export async function acceptGutoConsent() {
+  if (isGutoV3Enabled()) {
+    const result = await apiRequest<GutoV3StateResponse>(`/guto/v3/consent/accept`, {
+      method: "POST",
+      body: JSON.stringify({ requestId: createV3RequestId() }),
+    })
+    return gutoV3StateToMemory(result)
+  }
   return apiRequest<GutoMemory>(`/guto/consent/accept`, {
     method: "POST",
   })
@@ -737,6 +1055,31 @@ export async function validateWorkout(payload: {
     note?: string
   }
 }) {
+  if (isGutoV3Enabled()) {
+    const requestId = createV3RequestId()
+    const result = await apiRequest<GutoV3StateResponse>("/guto/v3/memory", {
+      method: "POST",
+      body: JSON.stringify({ requestId, xpEvent: "complete_daily_mission", language: payload.language }),
+    })
+    const memory = gutoV3StateToMemory(result)
+    const validation: WorkoutValidationRecord = {
+      id: requestId,
+      userId: payload.userId,
+      createdAt: new Date().toISOString(),
+      dateLabel: new Date().toISOString().slice(0, 10),
+      workoutFocus: payload.workoutFocus,
+      workoutLabel: payload.workoutLabel,
+      locationMode: payload.locationMode,
+      language: payload.language,
+      photoUrl: "",
+      posterUrl: "",
+      thumbUrl: "",
+      xp: memory.xpEvents.find((event) => event.id === requestId)?.amount || 100,
+      status: "validated",
+      gutoMessage: "Missão confirmada pelo Cérebro V3.",
+    }
+    return { success: true as const, validation, validationHistory: [validation] }
+  }
   return apiRequest<{ success: true; validation: WorkoutValidationRecord; validationHistory: WorkoutValidationRecord[]; workoutFeedback?: WorkoutFeedbackRecord; arena?: ArenaAwardResult }>(
     "/guto/validate-workout",
     {
@@ -793,6 +1136,68 @@ export interface ArenaAwardResult {
   leveledUp: boolean
 }
 
+function v3ArenaStats(state: GutoV3StateResponse["state"]) {
+  const now = new Date()
+  const weekStart = new Date(now)
+  const mondayOffset = (weekStart.getDay() + 6) % 7
+  weekStart.setDate(weekStart.getDate() - mondayOffset)
+  weekStart.setHours(0, 0, 0, 0)
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+  const positiveEvents = state.progression.xpEvents.filter((event) => event.amount > 0)
+  const completedDates = new Set(
+    state.progression.xpEvents
+      .filter((event) => event.reasonCode === "complete_daily_mission" && event.amount > 0)
+      .map((event) => event.sourceKey)
+  )
+  const nextEvolutionXp = state.progression.totalXp < 1_500
+    ? 1_500
+    : state.progression.totalXp < 5_000
+      ? 5_000
+      : state.progression.totalXp < 12_000
+        ? 12_000
+        : null
+
+  return {
+    weeklyXp: positiveEvents
+      .filter((event) => new Date(event.createdAt) >= weekStart)
+      .reduce((sum, event) => sum + event.amount, 0),
+    monthlyXp: positiveEvents
+      .filter((event) => new Date(event.createdAt) >= monthStart)
+      .reduce((sum, event) => sum + event.amount, 0),
+    currentStreak: completedDates.size,
+    validatedWorkouts: completedDates.size,
+    nextEvolutionXp,
+    xpToNextEvolution: nextEvolutionXp == null ? null : Math.max(0, nextEvolutionXp - state.progression.totalXp),
+  }
+}
+
+async function getV3ArenaRanking(rankingType: ArenaRankingResponse["rankingType"]): Promise<ArenaRankingResponse> {
+  const response = await getGutoV3State(createV3RequestId())
+  const state = response.state
+  const stats = v3ArenaStats(state)
+  const xp = rankingType === "weekly"
+    ? stats.weeklyXp
+    : rankingType === "monthly"
+      ? stats.monthlyXp
+      : state.progression.totalXp
+
+  return {
+    rankingType,
+    arenaGroupId: "guto-v3-self",
+    items: [{
+      position: 1,
+      userId: state.actor.externalSubject,
+      pairName: state.displayName || "GUTO",
+      avatarStage: state.progression.evolutionStage,
+      xp,
+      validatedWorkouts: stats.validatedWorkouts,
+      currentStreak: stats.currentStreak,
+      nextEvolutionXp: stats.nextEvolutionXp,
+      xpToNextEvolution: stats.xpToNextEvolution,
+    }],
+  }
+}
+
 export async function getGutoProactive({
   language,
   force = false,
@@ -800,6 +1205,10 @@ export async function getGutoProactive({
   language: SupportedLanguage
   force?: boolean
 }) {
+  // Proatividade ainda não foi migrada para o contrato V3. Enquanto a flag
+  // estiver ativa, não consultamos nem escrevemos a autoridade legada.
+  if (isGutoV3Enabled()) return { due: false } satisfies GutoProactiveResponse
+
   const params = new URLSearchParams({ language })
   if (force) params.set("force", "1")
 
@@ -815,10 +1224,12 @@ export async function getGutoProactive({
 // usuário (ex: GUTO_CORE_TEAM), o ranking vinha vazio. Sem o query param,
 // o backend resolve o grupo automaticamente via getUserArenaGroup(userId).
 export async function getArenaWeekly() {
+  if (isGutoV3Enabled()) return getV3ArenaRanking("weekly")
   return apiRequest<ArenaRankingResponse>(`/guto/arena/weekly`, { method: "GET" })
 }
 
 export async function getArenaMonthly() {
+  if (isGutoV3Enabled()) return getV3ArenaRanking("monthly")
   return apiRequest<ArenaRankingResponse>(`/guto/arena/monthly`, { method: "GET" })
 }
 
@@ -828,6 +1239,7 @@ export async function getArenaMonthly() {
  * só para compat com chamadas antigas.
  */
 export async function getArenaIndividual() {
+  if (isGutoV3Enabled()) return getV3ArenaRanking("individual")
   return apiRequest<ArenaRankingResponse>(
     `/guto/arena/individual`,
     { method: "GET" }
@@ -835,6 +1247,23 @@ export async function getArenaIndividual() {
 }
 
 export async function getArenaMe(userId: string) {
+  if (isGutoV3Enabled()) {
+    const response = await getGutoV3State(createV3RequestId())
+    const state = response.state
+    const stats = v3ArenaStats(state)
+    return {
+      userId: state.actor.externalSubject || userId,
+      pairName: state.displayName || "GUTO",
+      avatarStage: state.progression.evolutionStage,
+      totalXp: state.progression.totalXp,
+      weeklyXp: stats.weeklyXp,
+      monthlyXp: stats.monthlyXp,
+      currentStreak: stats.currentStreak,
+      validatedWorkoutsTotal: stats.validatedWorkouts,
+      nextEvolutionXp: stats.nextEvolutionXp,
+      xpToNextEvolution: stats.xpToNextEvolution,
+    } satisfies ArenaMyProfile
+  }
   // Mesma correção: o backend resolve o arenaGroupId pelo userId autenticado
   return apiRequest<ArenaMyProfile>(
     `/guto/arena/me?userId=${encodeURIComponent(userId)}`,
@@ -845,6 +1274,9 @@ export async function getArenaMe(userId: string) {
 // ─── Diet API ─────────────────────────────────────────────────────────────────
 
 export async function getDietPlan() {
+  if (isGutoV3Enabled()) {
+    return gutoV3StateToMemory(await getGutoV3State(createV3RequestId())).lastDietPlan || null
+  }
   try {
     return await apiRequest<DietPlan>(`/guto/diet`, {
       method: "GET",
@@ -857,6 +1289,16 @@ export async function getDietPlan() {
 }
 
 export async function generateDietPlan(language: SupportedLanguage = "pt-BR") {
+  if (isGutoV3Enabled()) {
+    const result = await apiRequest<GutoV3StateResponse>("/guto/v3/diet/generate", {
+      method: "POST",
+      timeoutMs: 45000,
+      body: JSON.stringify({ requestId: createV3RequestId(), language }),
+    })
+    const plan = gutoV3StateToMemory(result).lastDietPlan
+    if (!plan) throw new ApiError("Dieta V3 não confirmada.", 409)
+    return plan
+  }
   return apiRequest<DietPlan>("/guto/diet/generate", {
     method: "POST",
     timeoutMs: 45000,
@@ -1013,6 +1455,7 @@ export async function extractProactivityEvents(
   conversationText: string,
   language: SupportedLanguage
 ): Promise<number | null> {
+  if (isGutoV3Enabled()) return 0
   try {
     const result = await apiRequest<{ extracted: number; memories: ProactiveMemory[] }>(
       "/guto/proactivity/extract",
@@ -1034,6 +1477,7 @@ export async function extractProactivityEvents(
  * Called when the Monday proactive message is delivered.
  */
 export async function openWeeklyConversation(): Promise<void> {
+  if (isGutoV3Enabled()) return
   try {
     await apiRequest("/guto/proactivity/open-weekly", {
       method: "POST",
@@ -1050,6 +1494,7 @@ export async function openWeeklyConversation(): Promise<void> {
  * Returns active proactive memories for the current user.
  */
 export async function getProactiveMemories(): Promise<ProactiveMemory[]> {
+  if (isGutoV3Enabled()) return []
   try {
     const result = await apiRequest<{ memories: ProactiveMemory[] }>(
       "/guto/proactivity/memories",
@@ -1071,6 +1516,7 @@ export async function confirmProactiveMemory(
   memoryId: string,
   trainingAdapted?: boolean
 ): Promise<GutoProactivityActionResult> {
+  if (isGutoV3Enabled()) return { ok: true, ignored: true }
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/confirm", {
       method: "POST",
@@ -1087,6 +1533,7 @@ export async function discardProactiveMemory(
   memoryId: string,
   confirmedByUser = false
 ): Promise<GutoProactivityActionResult> {
+  if (isGutoV3Enabled()) return { ok: true, ignored: true }
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/discard", {
       method: "POST",
@@ -1100,6 +1547,7 @@ export async function discardProactiveMemory(
 }
 
 export async function changeProactiveMemoryDate(memoryId: string): Promise<GutoProactivityActionResult> {
+  if (isGutoV3Enabled()) return { ok: true, ignored: true }
   try {
     return await apiRequest<GutoProactivityActionResult>("/guto/proactivity/change-date", {
       method: "POST",
@@ -1115,6 +1563,7 @@ export async function updateProactiveMemory(
   memoryId: string,
   patch: Partial<Pick<ProactiveMemory, "understood" | "dateText" | "dateParsed" | "location">>
 ): Promise<GutoProactivityActionResult> {
+  if (isGutoV3Enabled()) return { ok: true, ignored: true }
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/update", {
       method: "POST",
@@ -1131,6 +1580,7 @@ export async function validateProactiveMemory(
   memoryId: string,
   outcome: ProactiveValidationOutcome
 ): Promise<GutoProactivityActionResult> {
+  if (isGutoV3Enabled()) return { ok: true, ignored: true }
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/validate", {
       method: "POST",
@@ -1144,6 +1594,7 @@ export async function validateProactiveMemory(
 }
 
 export async function requestDiscardProactiveMemory(memoryId: string): Promise<GutoProactivityActionResult> {
+  if (isGutoV3Enabled()) return { ok: true, ignored: true }
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/request-discard", {
       method: "POST",
@@ -1157,6 +1608,7 @@ export async function requestDiscardProactiveMemory(memoryId: string): Promise<G
 }
 
 export async function cancelDiscardRequest(memoryId: string): Promise<GutoProactivityActionResult> {
+  if (isGutoV3Enabled()) return { ok: true, ignored: true }
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/cancel-discard-request", {
       method: "POST",
@@ -1185,6 +1637,7 @@ export interface ActiveExercisePayload {
 }
 
 export async function setActiveExercise(exercise: ActiveExercisePayload): Promise<void> {
+  if (isGutoV3Enabled()) return
   try {
     await apiRequest("/guto/active-exercise", {
       method: "POST",
@@ -1196,6 +1649,7 @@ export async function setActiveExercise(exercise: ActiveExercisePayload): Promis
 }
 
 export async function clearActiveExercise(): Promise<void> {
+  if (isGutoV3Enabled()) return
   try {
     await apiRequest("/guto/active-exercise", {
       method: "POST",
