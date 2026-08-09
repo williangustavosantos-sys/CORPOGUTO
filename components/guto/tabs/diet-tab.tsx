@@ -561,14 +561,14 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }
   const loadFreshMemoryIfIncomplete = useCallback(async () => {
     if (isProfileCompleteFor(latestMemoryRef.current)) return latestMemoryRef.current
     try {
-      const freshMemory = await getGutoMemory()
+      const freshMemory = await getGutoMemory(userId)
       latestMemoryRef.current = freshMemory
       onMemoryPatch?.(freshMemory)
       return freshMemory
     } catch {
       return latestMemoryRef.current
     }
-  }, [isProfileCompleteFor, onMemoryPatch])
+  }, [isProfileCompleteFor, onMemoryPatch, userId])
 
   useEffect(() => {
     if (!userId) return
