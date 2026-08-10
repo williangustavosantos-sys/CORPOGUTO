@@ -967,6 +967,12 @@ export async function trackGutoEvent(payload: {
 }
 
 export async function validateGutoName(name: string, userId?: string) {
+  if (isGutoV3Enabled()) {
+    return apiRequest<GutoNameValidation>("/guto/v3/name/validate", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    })
+  }
   return apiRequest<GutoNameValidation>("/guto/validate-name", {
     method: "POST",
     body: JSON.stringify({ name, userId }),
