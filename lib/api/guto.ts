@@ -833,6 +833,18 @@ export function isGutoV3Enabled(): boolean {
   return process.env.NEXT_PUBLIC_GUTO_V3_ENABLED === "true"
 }
 
+// O Preview V3 não pode disfarçar uma funcionalidade ainda não migrada como
+// sucesso nem encaminhá-la para a autoridade legada. Quem chamar uma destas
+// superfícies recebe um erro identificável, sem tráfego para V1/V2.
+function throwV3UnsupportedFeature(feature: string): never {
+  throw new ApiError(
+    `A funcionalidade ${feature} ainda não pertence ao Cérebro V3 neste ambiente.`,
+    409,
+    { feature },
+    "V3_FEATURE_NOT_IMPLEMENTED",
+  )
+}
+
 export async function sendGutoMessage(payload: SendGutoMessageRequest) {
   if (isGutoV3Enabled()) {
     const result = await apiRequest<GutoV3TurnResponse>("/guto/v3", {
@@ -955,6 +967,7 @@ export async function trackGutoEvent(payload: {
   language?: SupportedLanguage
   metadata?: Record<string, unknown>
 }) {
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("telemetria legada")
   return apiRequest<{ ok: true }>("/guto/events", {
     method: "POST",
     timeoutMs: 5000,
@@ -1213,7 +1226,7 @@ export async function getGutoProactive({
 }) {
   // Proatividade ainda não foi migrada para o contrato V3. Enquanto a flag
   // estiver ativa, não consultamos nem escrevemos a autoridade legada.
-  if (isGutoV3Enabled()) return { due: false } satisfies GutoProactiveResponse
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("proatividade")
 
   const params = new URLSearchParams({ language })
   if (force) params.set("force", "1")
@@ -1461,7 +1474,7 @@ export async function extractProactivityEvents(
   conversationText: string,
   language: SupportedLanguage
 ): Promise<number | null> {
-  if (isGutoV3Enabled()) return 0
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("extração proativa")
   try {
     const result = await apiRequest<{ extracted: number; memories: ProactiveMemory[] }>(
       "/guto/proactivity/extract",
@@ -1483,7 +1496,7 @@ export async function extractProactivityEvents(
  * Called when the Monday proactive message is delivered.
  */
 export async function openWeeklyConversation(): Promise<void> {
-  if (isGutoV3Enabled()) return
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("conversa semanal proativa")
   try {
     await apiRequest("/guto/proactivity/open-weekly", {
       method: "POST",
@@ -1500,7 +1513,7 @@ export async function openWeeklyConversation(): Promise<void> {
  * Returns active proactive memories for the current user.
  */
 export async function getProactiveMemories(): Promise<ProactiveMemory[]> {
-  if (isGutoV3Enabled()) return []
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("memórias proativas")
   try {
     const result = await apiRequest<{ memories: ProactiveMemory[] }>(
       "/guto/proactivity/memories",
@@ -1522,7 +1535,7 @@ export async function confirmProactiveMemory(
   memoryId: string,
   trainingAdapted?: boolean
 ): Promise<GutoProactivityActionResult> {
-  if (isGutoV3Enabled()) return { ok: true, ignored: true }
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("confirmação proativa")
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/confirm", {
       method: "POST",
@@ -1539,7 +1552,7 @@ export async function discardProactiveMemory(
   memoryId: string,
   confirmedByUser = false
 ): Promise<GutoProactivityActionResult> {
-  if (isGutoV3Enabled()) return { ok: true, ignored: true }
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("descarte proativo")
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/discard", {
       method: "POST",
@@ -1553,7 +1566,7 @@ export async function discardProactiveMemory(
 }
 
 export async function changeProactiveMemoryDate(memoryId: string): Promise<GutoProactivityActionResult> {
-  if (isGutoV3Enabled()) return { ok: true, ignored: true }
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("alteração de data proativa")
   try {
     return await apiRequest<GutoProactivityActionResult>("/guto/proactivity/change-date", {
       method: "POST",
@@ -1569,7 +1582,7 @@ export async function updateProactiveMemory(
   memoryId: string,
   patch: Partial<Pick<ProactiveMemory, "understood" | "dateText" | "dateParsed" | "location">>
 ): Promise<GutoProactivityActionResult> {
-  if (isGutoV3Enabled()) return { ok: true, ignored: true }
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("atualização proativa")
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/update", {
       method: "POST",
@@ -1586,7 +1599,7 @@ export async function validateProactiveMemory(
   memoryId: string,
   outcome: ProactiveValidationOutcome
 ): Promise<GutoProactivityActionResult> {
-  if (isGutoV3Enabled()) return { ok: true, ignored: true }
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("validação proativa")
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/validate", {
       method: "POST",
@@ -1600,7 +1613,7 @@ export async function validateProactiveMemory(
 }
 
 export async function requestDiscardProactiveMemory(memoryId: string): Promise<GutoProactivityActionResult> {
-  if (isGutoV3Enabled()) return { ok: true, ignored: true }
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("solicitação proativa de descarte")
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/request-discard", {
       method: "POST",
@@ -1614,7 +1627,7 @@ export async function requestDiscardProactiveMemory(memoryId: string): Promise<G
 }
 
 export async function cancelDiscardRequest(memoryId: string): Promise<GutoProactivityActionResult> {
-  if (isGutoV3Enabled()) return { ok: true, ignored: true }
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("cancelamento proativo de descarte")
   try {
     const result = await apiRequest<GutoProactivityActionResult>("/guto/proactivity/cancel-discard-request", {
       method: "POST",
@@ -1643,7 +1656,7 @@ export interface ActiveExercisePayload {
 }
 
 export async function setActiveExercise(exercise: ActiveExercisePayload): Promise<void> {
-  if (isGutoV3Enabled()) return
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("exercício ativo legado")
   try {
     await apiRequest("/guto/active-exercise", {
       method: "POST",
@@ -1655,7 +1668,7 @@ export async function setActiveExercise(exercise: ActiveExercisePayload): Promis
 }
 
 export async function clearActiveExercise(): Promise<void> {
-  if (isGutoV3Enabled()) return
+  if (isGutoV3Enabled()) throwV3UnsupportedFeature("limpeza de exercício ativo legado")
   try {
     await apiRequest("/guto/active-exercise", {
       method: "POST",
