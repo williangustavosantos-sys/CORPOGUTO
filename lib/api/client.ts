@@ -25,7 +25,14 @@ const RAW_API_URL = shouldUseApiProxy()
 
 export const API_URL = RAW_API_URL.replace(/\/+$/, "")
 
+let activeAuthToken: string | undefined
+
+export function setApiAuthToken(token: string | null | undefined) {
+  activeAuthToken = token || undefined
+}
+
 function readAuthToken() {
+  if (activeAuthToken) return activeAuthToken
   if (typeof window === "undefined") return undefined
   try {
     return window.localStorage.getItem("guto-auth-token") ?? undefined
@@ -35,6 +42,7 @@ function readAuthToken() {
 }
 
 function removeAuthToken() {
+  activeAuthToken = undefined
   if (typeof window === "undefined") return
   try {
     window.localStorage.removeItem("guto-auth-token")
@@ -156,7 +164,9 @@ export async function apiRequest<T>(
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
-  // Tenta pegar token do localStorage se não foi passado explicitamente
+  // Prefer the token held by AuthProvider. localStorage remains the durable
+  // reload fallback, but blocked storage must not create an authenticated UI
+  // whose API requests silently lose the Authorization header.
   const activeToken = token || readAuthToken()
 
   try {

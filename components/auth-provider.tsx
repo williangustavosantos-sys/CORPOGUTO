@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { AuthUser, getMe, LoginResponse, logout as apiLogout } from "@/lib/api/auth"
+import { setApiAuthToken } from "@/lib/api/client"
 
 interface AuthContextType {
   user: AuthUser | null
@@ -56,6 +57,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const login = (data: LoginResponse) => {
+    setApiAuthToken(data.token)
     writeStoredToken(data.token)
     setToken(data.token)
     setUser({
@@ -71,6 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const logout = () => {
+    setApiAuthToken(null)
     removeStoredToken()
     setToken(null)
     setUser(null)
@@ -81,6 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const storedToken = readStoredToken()
     if (storedToken) {
+      setApiAuthToken(storedToken)
       setToken(storedToken)
       getMe()
         .then((me) => {
@@ -88,12 +92,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setIsLoading(false)
         })
         .catch(() => {
+          setApiAuthToken(null)
           removeStoredToken()
           setToken(null)
           setUser(null)
           setIsLoading(false)
         })
     } else {
+      setApiAuthToken(null)
       setIsLoading(false)
     }
   }, [])
