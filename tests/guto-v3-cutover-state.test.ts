@@ -1,6 +1,11 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import test from "node:test"
-import { gutoV3StateToMemory } from "../lib/api/guto"
+import { getConfirmedV3MemoryPatch, gutoV3StateToMemory, requireOfficialV3DietPlan } from "../lib/api/guto"
+
+const gutoAppSource = readFileSync(new URL("../components/guto/guto-app.tsx", import.meta.url), "utf8")
+const dietTabSource = readFileSync(new URL("../components/guto/tabs/diet-tab.tsx", import.meta.url), "utf8")
+const chatTabSource = readFileSync(new URL("../components/guto/tabs/chat-tab.tsx", import.meta.url), "utf8")
 
 const actor = {
   tenantId: "20000000-0000-4000-8000-000000000001",
@@ -35,16 +40,34 @@ function officialResponse() {
         weightKg: 80,
         heightCm: 180,
         trainingStatus: "active",
+        weeklyFrequencyDaysPerWeek: 4,
         trainingLocation: "gym",
       },
       goal: { version: 1, code: "consistency" },
       preferences: { version: 1, dietStyle: "vegetarian" },
+      firstContact: {
+        status: "COMPLETED" as const,
+        step: "completed" as const,
+        foodDeclaration: "Vegetariano",
+        limitationDeclaration: "Sem limitações",
+        startedAt: "2026-08-09T10:02:00.000Z",
+        completedAt: "2026-08-09T10:03:00.000Z",
+        currentPrompt: null,
+        summary: "Contexto confirmado",
+        confirmedContextVersion: 7,
+      },
+      confirmedContext: {
+        id: "context-7",
+        version: 7,
+        confirmedAt: "2026-08-09T10:03:00.000Z",
+      },
       healthConstraints: [],
       workout: {
         id: "40000000-0000-4000-8000-000000000001",
         version: 2,
         title: "Treino oficial",
         status: "active" as const,
+        confirmedContextVersion: 7,
         items: [{
           id: "50000000-0000-4000-8000-000000000001",
           exerciseId: "incline-dumbbell-press",
@@ -60,6 +83,7 @@ function officialResponse() {
         id: "60000000-0000-4000-8000-000000000001",
         version: 2,
         status: "active" as const,
+        confirmedContextVersion: 7,
         totalCalories: 2200,
         proteinGrams: 140,
         carbsGrams: 260,
@@ -122,4 +146,54 @@ test("estado V3 reconciliado usa IDs oficiais para treino, dieta e contexto apó
   assert.equal(memory.activeContext?.currentItem.name, "Supino inclinado com halteres")
   assert.equal(memory.totalXp, 200)
   assert.equal(memory.trainedToday, true)
+  assert.equal(memory.countryCode, "IT")
+  assert.equal(memory.trainingFrequencyDaysPerWeek, 4)
+})
+
+test("mutações críticas V3 reconciliam o estado oficial antes de renderizar treino e dieta", () => {
+  assert.match(gutoAppSource, /const reconcileV3OfficialState = useCallback/)
+  assert.match(gutoAppSource, /await reconcileV3OfficialState\(\)/)
+  assert.match(gutoAppSource, /onMemoryPatch=\{applyMemoryPatch\}/)
+  assert.match(gutoAppSource, /applyOfficialV3Memory\(patch\)/)
+  assert.match(dietTabSource, /const sharedPlanContextReady = confirmedContextReady && plansShareConfirmedV3Context\(memory\)/)
+  assert.match(dietTabSource, /if \(v3Enabled\) return/)
+  assert.doesNotMatch(dietTabSource, /if \(isGutoV3Enabled\(\)\) \{\s+const officialMemory = await getGutoMemory/)
+  assert.match(chatTabSource, /if \(v3Enabled\) return/)
+  assert.match(chatTabSource, /if \(!v3Enabled && dietReadyFromBackend/)
+})
+
+test("estado oficial confirmado é aplicável mesmo quando a fala ficou stale", () => {
+  const officialMemory = gutoV3StateToMemory(officialResponse())
+  const patch = getConfirmedV3MemoryPatch({
+    brainVersion: "guto-cerebro-v3",
+    discardedReason: "stale_context",
+    execution: { status: "confirmed", code: "SWAP_CONFIRMED", message: "confirmed" },
+    memoryPatch: officialMemory,
+  })
+
+  assert.equal(patch, officialMemory)
+  assert.equal(getConfirmedV3MemoryPatch({
+    brainVersion: "guto-cerebro-v3",
+    execution: { status: "rejected", code: "REJECTED", message: "rejected" },
+    memoryPatch: officialMemory,
+  }), null)
+
+  const patchApplication = chatTabSource.indexOf("const confirmedOfficialMemoryPatch = getConfirmedV3MemoryPatch(data)")
+  const staleSpeechGate = chatTabSource.indexOf('if (renderDecision.kind !== "accepted")')
+  assert.ok(patchApplication >= 0 && patchApplication < staleSpeechGate)
+})
+
+test("dieta V3 só renderiza o plano oficial da versão de contexto confirmada", () => {
+  const officialMemory = gutoV3StateToMemory(officialResponse())
+  assert.equal(requireOfficialV3DietPlan(officialMemory), officialMemory.lastDietPlan)
+  assert.throws(
+    () => requireOfficialV3DietPlan({ ...officialMemory, lastDietPlan: null }),
+    (error: unknown) => Boolean(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "V3_DIET_NOT_CONFIRMED"
+    ),
+  )
+  assert.match(dietTabSource, /const officialDietPlan = v3Enabled && !sharedPlanContextReady \? null : memory\?\.lastDietPlan \?\? null/)
+  assert.match(dietTabSource, /No Preview V3, esta aba nunca gera ou busca uma dieta paralela/)
 })

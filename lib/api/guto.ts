@@ -1,5 +1,6 @@
 import { apiRequest, ApiError } from "./client"
 import { assertValidGutoUserId } from "../guto-user-id"
+import { Country } from "country-state-city"
 
 export type SupportedLanguage = "pt-BR" | "it-IT" | "en-US"
 export type WorkoutLocationMode = "gym" | "home" | "park"
@@ -88,6 +89,7 @@ export type GutoAction =
   | "updateWorkout"
   | "generateDiet"
   | "generateWorkout"
+  | "updateFacts"
   | "swapExercise"
   | "swapFood"
   | "startMinimumMission"
@@ -175,6 +177,7 @@ export interface GutoWorkoutPlan {
   updatedAt?: string
   proactiveImpactId?: string
   proactiveAdaptationMode?: ProactiveWorkoutEffect
+  confirmedContextVersion?: number | null
 }
 
 export interface GutoExpectedResponse {
@@ -319,6 +322,8 @@ export interface GutoV3Execution {
   message: string
   planVersion?: number
   activeContextVersion?: number
+  factContextVersion?: number
+  affectedDomains?: Array<"WORKOUT" | "NUTRITION" | "PROGRESS" | "PROACTIVITY" | "SESSION">
 }
 
 export interface GutoV3Versions {
@@ -337,6 +342,38 @@ export interface GutoV3TurnResponse {
   versions: GutoV3Versions
 }
 
+export function getConfirmedV3MemoryPatch(response: SendGutoMessageResponse) {
+  if (
+    response.brainVersion !== "guto-cerebro-v3" ||
+    response.execution?.status !== "confirmed" ||
+    !response.memoryPatch ||
+    Object.keys(response.memoryPatch).length === 0
+  ) {
+    return null
+  }
+  return response.memoryPatch
+}
+
+export function requireOfficialV3DietPlan(memory: GutoMemory) {
+  const contextVersion = memory.confirmedContext?.version
+  if (
+    !memory.lastDietPlan ||
+    memory.firstContact?.status !== "COMPLETED" ||
+    !contextVersion ||
+    memory.firstContact.confirmedContextVersion !== contextVersion ||
+    memory.lastWorkoutPlan?.confirmedContextVersion !== contextVersion ||
+    memory.lastDietPlan.confirmedContextVersion !== contextVersion
+  ) {
+    throw new ApiError(
+      "Dieta V3 não confirmada na mesma versão oficial do treino.",
+      409,
+      undefined,
+      "V3_DIET_NOT_CONFIRMED",
+    )
+  }
+  return memory.lastDietPlan
+}
+
 export interface GutoV3ActiveContext {
   id: string
   version: number
@@ -347,6 +384,35 @@ export interface GutoV3ActiveContext {
   itemLabel: string
   rejectedCandidateIds?: string[]
   updatedAt: string
+}
+
+export type GutoV3FirstContactStatus = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED"
+export type GutoV3FirstContactStep = "food_restrictions" | "training_limitations" | "confirmation" | "completed"
+
+export interface GutoV3FirstContactState {
+  status: GutoV3FirstContactStatus
+  step: GutoV3FirstContactStep
+  foodDeclaration: string | null
+  limitationDeclaration: string | null
+  startedAt: string | null
+  completedAt: string | null
+  currentPrompt: string | null
+  summary: string | null
+  confirmedContextVersion: number | null
+}
+
+export interface GutoV3ConfirmedContext {
+  id: string
+  version: number
+  confirmedAt: string
+}
+
+export function shouldStartGutoV3FirstContact(firstContact?: GutoV3FirstContactState | null) {
+  return firstContact?.status === "NOT_STARTED"
+}
+
+export function isGutoV3FirstContactActive(firstContact?: GutoV3FirstContactState | null) {
+  return firstContact?.status === "NOT_STARTED" || firstContact?.status === "IN_PROGRESS"
 }
 
 export interface GutoV3StateResponse {
@@ -368,17 +434,32 @@ export interface GutoV3StateResponse {
       version: number
       displayName?: string
       language: SupportedLanguage
-      city: string
-      country: string
+      city?: string
+      country?: string
       biologicalSex: string
       age: number
       weightKg: number
       heightCm: number
       trainingStatus: string
+      weeklyFrequencyDaysPerWeek: number
       trainingLocation: string
     }
     goal: null | { version: number; code: string }
     preferences: { version: number; dietStyle?: string }
+    firstContact: GutoV3FirstContactState
+    confirmedContext: GutoV3ConfirmedContext | null
+    currentFacts?: Array<{
+      id: string
+      factType: string
+      canonicalValue: string
+      value: Record<string, unknown>
+      confirmationStatus: "FACT_CONFIRMED" | "FACT_UNKNOWN"
+      validFrom: string
+      validTo: string | null
+      recordedAt: string
+      supersededAt: string | null
+      supersededBy: string | null
+    }>
     healthConstraints: Array<{
       id: string
       kind: "limitation" | "injury" | "illness" | "allergy" | "food_restriction"
@@ -392,6 +473,7 @@ export interface GutoV3StateResponse {
       version: number
       title: string
       status: string
+      confirmedContextVersion: number | null
       items: Array<{
         id: string
         exerciseId: string
@@ -413,6 +495,7 @@ export interface GutoV3StateResponse {
       id: string
       version: number
       status: string
+      confirmedContextVersion: number | null
       totalCalories: number
       proteinGrams: number
       carbsGrams: number
@@ -460,19 +543,19 @@ export interface GutoV3CalibrationRequest {
     weightKg: number
     heightCm: number
     trainingStatus: "beginner" | "returning" | "active" | "advanced"
-    trainingLocation: string
-    city: string
-    country: string
-    language: SupportedLanguage
+    weeklyFrequencyDaysPerWeek: number
   }
   goal: { code: string }
-  preferences: { dietStyle?: string }
-  healthConstraints: Array<{
-    kind: "limitation" | "injury" | "illness" | "allergy" | "food_restriction"
-    bodyRegion?: string
-    description: string
-    severity?: "low" | "medium" | "high" | "unknown"
-  }>
+}
+
+export interface GutoV3CalibrationInput {
+  biologicalSex: "male" | "female"
+  age: number
+  weightKg: number
+  heightCm: number
+  trainingLevel: "beginner" | "returning" | "consistent" | "advanced"
+  trainingGoal: string
+  trainingFrequencyDaysPerWeek: number
 }
 
 export interface GutoNameValidation {
@@ -501,6 +584,7 @@ export interface GutoMemory {
   biologicalSex?: "female" | "male"
   trainingLevel?: "beginner" | "returning" | "consistent" | "advanced"
   trainingGoal?: "consistency" | "fat_loss" | "muscle_gain" | "conditioning" | "mobility_health"
+  trainingFrequencyDaysPerWeek?: number
   preferredTrainingLocation?: "gym" | "home" | "park" | "mixed"
   trainingPathology?: string
   country?: string
@@ -560,6 +644,8 @@ export interface GutoMemory {
   recentChatHistory?: Array<{ id: string; text: string; isGuto: boolean; timestamp: string }>
   validationHistory?: WorkoutValidationRecord[]
   workoutFeedbackHistory?: WorkoutFeedbackRecord[]
+  firstContact?: GutoV3FirstContactState
+  confirmedContext?: GutoV3ConfirmedContext | null
   // Classificação semântica dos 3 campos livres (país/patologia/restrição) feita
   // pelo backend. Usada pelos badges de contexto (Fase 3K) para distinguir
   // cuidado físico ativo (status "clear" + bodyRegion) de cuidado pendente.
@@ -652,6 +738,7 @@ export interface DietPlan {
   lockedByCoach?: boolean
   updatedBy?: string
   updatedAt?: string
+  confirmedContextVersion?: number | null
 }
 
 function createV3RequestId(): string {
@@ -704,7 +791,28 @@ function v3WorkoutToLegacy(state: GutoV3StateResponse["state"]): GutoWorkoutPlan
     })),
     planSource: "ai_generated",
     source: "guto_generated",
+    confirmedContextVersion: plan.confirmedContextVersion,
   }
+}
+
+function normalizeV3Country(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("en-US")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+}
+
+function v3CountryCode(country?: string) {
+  const normalized = normalizeV3Country(country || "")
+  if (!normalized) return undefined
+
+  const names = ["pt-BR", "it-IT", "en-US"].map((locale) => new Intl.DisplayNames([locale], { type: "region" }))
+  return Country.getAllCountries().find((candidate) =>
+    [candidate.isoCode, candidate.name, ...names.map((display) => display.of(candidate.isoCode) || "")]
+      .some((value) => normalizeV3Country(value) === normalized),
+  )?.isoCode
 }
 
 function v3DietToLegacy(state: GutoV3StateResponse["state"]): DietPlan | null {
@@ -745,6 +853,7 @@ function v3DietToLegacy(state: GutoV3StateResponse["state"]): DietPlan | null {
     })),
     planSource: "ai_generated",
     source: "guto_generated",
+    confirmedContextVersion: plan.confirmedContextVersion,
   }
 }
 
@@ -788,6 +897,16 @@ export function gutoV3StateToMemory(response: GutoV3StateResponse): GutoMemory {
   const adaptedMissionDates = xpEvents.filter((event) => event.type === "accept_adapted_mission").map((event) => event.date)
   const missedMissionDates = xpEvents.filter((event) => event.type === "apply_daily_miss_penalty").map((event) => event.date)
   const initialXpGranted = Boolean(state.journey.pactAcceptedAt || xpEvents.some((event) => event.type === "grant_initial_xp"))
+  const confirmedContextReady = Boolean(
+    state.firstContact.status === "COMPLETED" &&
+    state.confirmedContext?.version &&
+    state.firstContact.confirmedContextVersion === state.confirmedContext.version
+  )
+  const plansShareConfirmedContext = Boolean(
+    confirmedContextReady &&
+    state.workout?.confirmedContextVersion === state.confirmedContext?.version &&
+    state.diet?.confirmedContextVersion === state.confirmedContext?.version
+  )
   return {
     userId: state.actor.externalSubject,
     name: state.displayName,
@@ -806,9 +925,11 @@ export function gutoV3StateToMemory(response: GutoV3StateResponse): GutoMemory {
     biologicalSex: profile?.biologicalSex === "male" || profile?.biologicalSex === "female" ? profile.biologicalSex : undefined,
     trainingLevel: profile?.trainingStatus === "active" ? "consistent" : profile?.trainingStatus as GutoMemory["trainingLevel"],
     trainingGoal: state.goal?.code as GutoMemory["trainingGoal"],
+    trainingFrequencyDaysPerWeek: profile?.weeklyFrequencyDaysPerWeek,
     preferredTrainingLocation: profile?.trainingLocation === "home" || profile?.trainingLocation === "park" || profile?.trainingLocation === "mixed" ? profile.trainingLocation : profile ? "gym" : undefined,
     trainingPathology: limitations || undefined,
     country: profile?.country,
+    countryCode: v3CountryCode(profile?.country),
     city: profile?.city,
     heightCm: profile?.heightCm,
     weightKg: profile?.weightKg,
@@ -823,10 +944,37 @@ export function gutoV3StateToMemory(response: GutoV3StateResponse): GutoMemory {
     lastWorkoutPlan: workout,
     lastDietPlan: diet,
     activeContext: v3ActiveContextToLegacy(response.activeContext),
-    dietGenerationStatus: diet ? "generated" : profile ? "ready_to_generate" : "idle",
+    dietGenerationStatus: plansShareConfirmedContext
+      ? "generated"
+      : profile && confirmedContextReady
+        ? "ready_to_generate"
+        : "idle",
     proactiveSent: {},
     initialXpRewardSeen: state.journey.initialXpRewardSeen,
+    firstContact: state.firstContact,
+    confirmedContext: state.confirmedContext,
   }
+}
+
+export function hasConfirmedV3Context(memory?: Pick<GutoMemory, "firstContact" | "confirmedContext"> | null) {
+  return Boolean(
+    memory?.firstContact?.status === "COMPLETED" &&
+    memory.confirmedContext?.version &&
+    memory.firstContact.confirmedContextVersion === memory.confirmedContext.version
+  )
+}
+
+export function plansShareConfirmedV3Context(memory?: {
+  confirmedContext?: GutoV3ConfirmedContext | null
+  lastWorkoutPlan?: { confirmedContextVersion?: number | null } | null
+  lastDietPlan?: { confirmedContextVersion?: number | null } | null
+} | null) {
+  const version = memory?.confirmedContext?.version
+  return Boolean(
+    version &&
+    memory?.lastWorkoutPlan?.confirmedContextVersion === version &&
+    memory?.lastDietPlan?.confirmedContextVersion === version
+  )
 }
 
 export function isGutoV3Enabled(): boolean {
@@ -866,6 +1014,13 @@ export async function sendGutoMessage(payload: SendGutoMessageRequest) {
       turnId: payload.turnId,
       requestId: result.requestId,
       contextId: payload.contextId || undefined,
+      // O V3 recebe somente o texto e o identificador do contexto. Estes
+      // metadados pertencem ao turno do navegador e precisam voltar no
+      // adaptador para que a barreira anti-resposta-obsoleta valide o mesmo
+      // contexto que originou a chamada.
+      contextVersion: payload.contextVersion ?? undefined,
+      activeContextType: payload.activeContextType ?? undefined,
+      activeItemId: payload.activeItemId ?? undefined,
       fala: result.speech,
       acao: result.action,
       brainVersion: result.brainVersion,
@@ -898,7 +1053,22 @@ export async function getGutoV3State(requestId: string) {
   })
 }
 
-export async function saveGutoV3Calibration(payload: GutoV3CalibrationRequest) {
+export function buildGutoV3CalibrationRequest(input: GutoV3CalibrationInput): GutoV3CalibrationRequest {
+  return {
+    requestId: createV3RequestId(),
+    profile: {
+      biologicalSex: input.biologicalSex,
+      age: input.age,
+      weightKg: input.weightKg,
+      heightCm: input.heightCm,
+      trainingStatus: input.trainingLevel === "consistent" ? "active" : input.trainingLevel,
+      weeklyFrequencyDaysPerWeek: input.trainingFrequencyDaysPerWeek,
+    },
+    goal: { code: input.trainingGoal },
+  }
+}
+
+export async function saveGutoV3Calibration(input: GutoV3CalibrationInput) {
   return apiRequest<{
     status: "confirmed"
     requestId: string
@@ -908,7 +1078,32 @@ export async function saveGutoV3Calibration(payload: GutoV3CalibrationRequest) {
     traceId: string
   }>("/guto/v3/calibration", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(buildGutoV3CalibrationRequest(input)),
+  })
+}
+
+export async function startGutoV3FirstContact() {
+  return apiRequest<GutoV3StateResponse>("/guto/v3/first-contact/start", {
+    method: "POST",
+    body: JSON.stringify({ requestId: createV3RequestId() }),
+  })
+}
+
+export async function respondGutoV3FirstContact(
+  answer: string,
+  expectedStep: Extract<GutoV3FirstContactStep, "food_restrictions" | "training_limitations">,
+) {
+  return apiRequest<GutoV3StateResponse>("/guto/v3/first-contact/respond", {
+    method: "POST",
+    body: JSON.stringify({ requestId: createV3RequestId(), answer, expectedStep }),
+  })
+}
+
+export async function confirmGutoV3FirstContact() {
+  return apiRequest<GutoV3StateResponse>("/guto/v3/first-contact/confirm", {
+    method: "POST",
+    timeoutMs: 60000,
+    body: JSON.stringify({ requestId: createV3RequestId(), confirmed: true }),
   })
 }
 

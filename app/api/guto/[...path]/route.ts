@@ -1,5 +1,9 @@
 import { NextRequest } from "next/server"
-import { isGutoProxyHostAllowed } from "@/lib/api/guto-proxy-host"
+import {
+  isGutoProxyHostAllowed,
+  isGutoV3PanelProxyPathAllowed,
+  isGutoV3ProxyPathAllowed,
+} from "@/lib/api/guto-proxy-host"
 
 const BACKEND_URL = (
   process.env.GUTO_BACKEND_PROXY_URL ||
@@ -12,15 +16,27 @@ type RouteContext = {
 }
 
 async function proxyToBackend(request: NextRequest, context: RouteContext) {
-  if (!BACKEND_URL) {
-    return Response.json({ message: "Backend proxy sem URL configurada." }, { status: 500 })
-  }
-
   if (!isGutoProxyHostAllowed(request.headers.get("host"))) {
     return Response.json({ message: "Proxy GUTO indisponível neste host." }, { status: 404 })
   }
 
   const params = await context.params
+  if (
+    (process.env.GUTO_V3_ONLY === "true" || process.env.NEXT_PUBLIC_GUTO_V3_ENABLED === "true") &&
+    !isGutoV3ProxyPathAllowed(params.path) &&
+    !(process.env.NEXT_PUBLIC_GUTO_V3_PANEL_ENABLED === "true" && isGutoV3PanelProxyPathAllowed(params.path))
+  ) {
+    return Response.json({
+      error: "V3_LEGACY_AUTHORITY_DISABLED",
+      message: "O Preview do Cérebro V3 não encaminha rotas legadas.",
+      brainVersion: "guto-cerebro-v3",
+    }, { status: 409 })
+  }
+
+  if (!BACKEND_URL) {
+    return Response.json({ message: "Backend proxy sem URL configurada." }, { status: 500 })
+  }
+
   const path = params.path?.map(encodeURIComponent).join("/") || ""
   const target = new URL(`${BACKEND_URL}/${path}`)
   target.search = request.nextUrl.search

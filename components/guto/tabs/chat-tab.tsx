@@ -8,16 +8,26 @@ import { Dumbbell, Loader2, Mic, Plane, Send, TrendingUp, UtensilsCrossed, Volum
 import { getApiErrorMessage } from "@/lib/api/client"
 import {
   cancelDiscardRequest,
+  confirmGutoV3FirstContact,
   confirmProactiveMemory,
   discardProactiveMemory,
   extractProactivityEvents,
   generateDietPlan,
+  getConfirmedV3MemoryPatch,
   getGutoProactive,
+  getGutoV3State,
   getProactiveMemories,
+  gutoV3StateToMemory,
+  hasConfirmedV3Context,
+  isGutoV3FirstContactActive,
   isGutoV3Enabled,
+  plansShareConfirmedV3Context,
   requestDiscardProactiveMemory,
+  respondGutoV3FirstContact,
   sendGutoMessage,
   setGutoActiveContext,
+  shouldStartGutoV3FirstContact,
+  startGutoV3FirstContact,
   trackGutoEvent,
   updateProactiveMemory,
   validateProactiveMemory,
@@ -191,6 +201,8 @@ const chatCopy: Record<
     quickReplyLabel: string
     cardBlockPrompt: string
     dateInputLabel: string
+    confirmContext: string
+    contextConfirmed: string
   }
 > = {
   "pt-BR": {
@@ -215,7 +227,7 @@ const chatCopy: Record<
     exerciseInputPlaceholder: "Ex.: equipamento ocupado, como executar, trocar exercício…",
     mealInputPlaceholder: "Ex.: não tenho isso, quanto de substituto, trocar alimento…",
     contextClear: "Sair do contexto",
-    opening: (name) => `Finalmente${name ? `, ${name}` : ""}. Tava te esperando. Enquanto isso, já organizei nosso plano daqui pra frente. Estamos juntos — bora começar?`,
+    opening: (name) => `Finalmente chegou${name ? `, ${name}` : ""}. Tava te esperando. Antes de começar de verdade, preciso alinhar duas coisas importantes...`,
     conversationActive: "Conversa ativa",
     visualMemoryHint: "Decisões aparecem no Percurso",
     voiceOn: "VOZ ON",
@@ -223,6 +235,8 @@ const chatCopy: Record<
     quickReplyLabel: "Resposta rápida",
     cardBlockPrompt: "Confirma o card para eu seguir.",
     dateInputLabel: "Nova data",
+    confirmContext: "CONFIRMAR CONTEXTO",
+    contextConfirmed: "Contexto confirmado. Agora treino e dieta nasceram da mesma versão de você.",
   },
   "en-US": {
     channel: "Oracle channel",
@@ -246,7 +260,7 @@ const chatCopy: Record<
     exerciseInputPlaceholder: "E.g. equipment busy, how to perform, swap exercise…",
     mealInputPlaceholder: "E.g. don't have this, how much substitute, swap food…",
     contextClear: "Clear context",
-    opening: (name) => `Finally${name ? `, ${name}` : ""}. I was waiting for you. In the meantime, I already organized our plan from here. I'm with you — ready to start?`,
+    opening: (name) => `You finally made it${name ? `, ${name}` : ""}. I was waiting for you. Before we truly begin, I need to align two important things...`,
     conversationActive: "Active conversation",
     visualMemoryHint: "Decisions appear in Journey",
     voiceOn: "VOICE ON",
@@ -254,6 +268,8 @@ const chatCopy: Record<
     quickReplyLabel: "Quick reply",
     cardBlockPrompt: "Confirm the card so I can continue.",
     dateInputLabel: "New date",
+    confirmContext: "CONFIRM CONTEXT",
+    contextConfirmed: "Context confirmed. Your workout and diet now come from the same version of you.",
   },
   "it-IT": {
     channel: "Canale dell'oracolo",
@@ -277,7 +293,7 @@ const chatCopy: Record<
     exerciseInputPlaceholder: "Es.: attrezzo occupato, come eseguire, cambiare esercizio…",
     mealInputPlaceholder: "Es.: non ce l'ho, quanto sostituto, cambiare alimento…",
     contextClear: "Esci dal contesto",
-    opening: (name) => `Finalmente${name ? `, ${name}` : ""}. Ti stavo aspettando. Nel frattempo ho già organizzato il nostro piano da qui in avanti. Sono con te — iniziamo?`,
+    opening: (name) => `Finalmente sei arrivato${name ? `, ${name}` : ""}. Ti stavo aspettando. Prima di iniziare davvero, devo allineare due cose importanti...`,
     conversationActive: "Conversazione attiva",
     visualMemoryHint: "Le decisioni appaiono nel Percorso",
     voiceOn: "VOCE ON",
@@ -285,6 +301,8 @@ const chatCopy: Record<
     quickReplyLabel: "Risposta rapida",
     cardBlockPrompt: "Conferma la card per continuare.",
     dateInputLabel: "Nuova data",
+    confirmContext: "CONFERMA CONTESTO",
+    contextConfirmed: "Contesto confermato. Allenamento e dieta ora nascono dalla stessa versione di te.",
   },
 }
 
@@ -643,6 +661,8 @@ export function ChatTab({
   const locale = translations[validLang]
   const copy = chatCopy[validLang]
   const brandName = formatDisplayName(userName || "")
+  const v3Enabled = isGutoV3Enabled()
+  const officialFirstContact = memory?.firstContact
   const storedChatState = useMemo(() => readStoredChatState(userId), [userId])
   const localOpeningMessage = useMemo<Message>(
     () => ({
@@ -656,6 +676,22 @@ export function ChatTab({
   )
   const calibrationComplete = hasCompleteGutoCalibration(memory)
   const initialChatState = useMemo(() => {
+    const firstContact = memory?.firstContact
+    if (v3Enabled && isGutoV3FirstContactActive(firstContact)) {
+      const prompt = firstContact?.currentPrompt?.trim()
+      return {
+        messages: prompt ? [{
+          id: `g-first-contact-${firstContact?.step}-${firstContact?.startedAt || "pending"}`,
+          text: prompt,
+          isGuto: true,
+          timestamp: new Date(),
+          avatarEmotion: "default" as const,
+        }] : [],
+        expectedResponse: null,
+        expectedResponseMessageId: null,
+        pendingTurn: null,
+      }
+    }
     if (storedChatState) return storedChatState
     const backendHistory = (memory as { recentChatHistory?: Array<{ id: string; text: string; isGuto: boolean; timestamp: string }> })?.recentChatHistory
     if (Array.isArray(backendHistory) && backendHistory.length > 0) {
@@ -697,6 +733,7 @@ export function ChatTab({
     memory,
     storedChatState,
     userId,
+    v3Enabled,
   ])
 
   const [messages, setMessages] = useState<Message[]>(initialChatState.messages)
@@ -736,6 +773,8 @@ export function ChatTab({
   const blockingProactiveCardRef = useRef(false)
   const lastProactiveKeyRef = useRef<string | null>(null)
   const arrivalBriefingRequestedRef = useRef(false)
+  const firstContactStartRequestedRef = useRef(false)
+  const firstContactMutationInFlightRef = useRef(false)
   const initialXpCardDismissedRef = useRef(
     initialXpRewardSeen || readInitialXpRewardSeen(userId)
   )
@@ -796,6 +835,73 @@ export function ChatTab({
     })
   }, [expectedResponse, expectedResponseMessageId, messages, pendingTurn, userId])
 
+  const applyOfficialFirstContactState = useCallback((response: Parameters<typeof gutoV3StateToMemory>[0]) => {
+    const official = gutoV3StateToMemory(response)
+    onMemoryPatch?.(official)
+    onWorkoutPlanUpdated?.(
+      hasConfirmedV3Context(official) && plansShareConfirmedV3Context(official)
+        ? official.lastWorkoutPlan || null
+        : null,
+    )
+    const firstContact = official.firstContact
+    const prompt = firstContact?.currentPrompt?.trim()
+    if (firstContact?.status === "IN_PROGRESS" && prompt) {
+      const messageId = `g-first-contact-${firstContact.step}-${firstContact.startedAt || "pending"}`
+      setMessages((previous) => appendMessagesWithoutDuplicateGuto(previous, [{
+        id: messageId,
+        text: prompt,
+        isGuto: true,
+        timestamp: new Date(),
+        avatarEmotion: "default",
+      }]))
+    }
+    return official
+  }, [onMemoryPatch, onWorkoutPlanUpdated])
+
+  useEffect(() => {
+    firstContactStartRequestedRef.current = false
+    firstContactMutationInFlightRef.current = false
+  }, [userId])
+
+  useEffect(() => {
+    if (!v3Enabled || !shouldStartGutoV3FirstContact(memory?.firstContact)) return
+    if (firstContactStartRequestedRef.current) return
+    firstContactStartRequestedRef.current = true
+    setIsSending(true)
+
+    void startGutoV3FirstContact()
+      .then(applyOfficialFirstContactState)
+      .catch(() => {
+        setMessages((previous) => previous.length > 0 ? previous : [{
+          id: `g-first-contact-error-${Date.now()}`,
+          text: copy.connectionError,
+          isGuto: true,
+          timestamp: new Date(),
+          avatarEmotion: "default",
+        }])
+      })
+      .finally(() => setIsSending(false))
+  }, [applyOfficialFirstContactState, copy.connectionError, memory?.firstContact, v3Enabled])
+
+  useEffect(() => {
+    const firstContact = memory?.firstContact
+    const prompt = firstContact?.currentPrompt?.trim()
+    if (!v3Enabled || firstContact?.status !== "IN_PROGRESS" || !prompt) return
+
+    const messageId = `g-first-contact-${firstContact.step}-${firstContact.startedAt || "pending"}`
+    setMessages((previous) => {
+      if (previous.some((message) => message.id === messageId && message.text === prompt)) return previous
+      const withoutStaleStep = previous.filter((message) => message.id !== messageId)
+      return appendMessagesWithoutDuplicateGuto(withoutStaleStep, [{
+        id: messageId,
+        text: prompt,
+        isGuto: true,
+        timestamp: new Date(),
+        avatarEmotion: "default",
+      }])
+    })
+  }, [memory?.firstContact, v3Enabled])
+
   useEffect(() => {
     if (typeof window === "undefined") return
     try {
@@ -812,9 +918,14 @@ export function ChatTab({
   const dismissInitialXpCardRef = useRef<(() => void) | null>(null)
 
   const refreshProactiveMemories = useCallback(async () => {
-    const memories = await getProactiveMemories()
-    setProactiveMemories(memories)
-    return memories
+    try {
+      const memories = await getProactiveMemories()
+      setProactiveMemories(memories)
+      return memories
+    } catch (error) {
+      console.warn(`Memórias proativas do GUTO indisponíveis: ${getApiErrorMessage(error)}`)
+      return null
+    }
   }, [])
 
   const applyProactiveMemoriesFromPatch = useCallback((patch?: Partial<GutoMemory> | null) => {
@@ -922,6 +1033,7 @@ export function ChatTab({
 
   const triggerProactivityExtraction = useCallback(
     (safeLanguage: SupportedLanguage, extraMessages: Message[] = []) => {
+      if (v3Enabled) return
       if (hasExtractedThisWeek(userId)) return
       const currentMessages = [...messagesRef.current, ...extraMessages]
       if (currentMessages.length < PROACTIVITY_MIN_MESSAGES_FOR_EXTRACTION) return
@@ -935,9 +1047,11 @@ export function ChatTab({
         if (extracted === null) return
         markExtractedThisWeek(userId)
         await refreshProactiveMemories()
+      }).catch((error) => {
+        console.warn(`Extração proativa do GUTO indisponível: ${getApiErrorMessage(error)}`)
       })
     },
-    [refreshProactiveMemories, userId]
+    [refreshProactiveMemories, userId, v3Enabled]
   )
 
   const handleProactiveMemoryAction = useCallback(
@@ -988,6 +1102,7 @@ export function ChatTab({
 
   useEffect(() => {
     if (!initialXpGranted) return
+    if (v3Enabled && memory?.firstContact?.status !== "COMPLETED") return
     if (
       initialXpCardDismissedRef.current ||
       initialXpRewardSeen ||
@@ -1008,7 +1123,7 @@ export function ChatTab({
       window.clearTimeout(successTimer)
       window.clearTimeout(autoDismissTimer)
     }
-  }, [initialXpGranted, initialXpRewardSeen, userId])
+  }, [initialXpGranted, initialXpRewardSeen, memory?.firstContact?.status, userId, v3Enabled])
 
   const clearActiveContext = useCallback(() => {
     activeExerciseContextRef.current = null
@@ -1095,6 +1210,7 @@ export function ChatTab({
   }, [getVoiceQueue, stopTypingLoop])
 
   const checkProactiveMessage = useCallback(async (forceArrivalBriefing = false) => {
+    if (v3Enabled) return
     if (proactiveInFlightRef.current || sendInFlightRef.current) return
     if (showInitialXpCardRef.current) return
     if (forceArrivalBriefing && arrivalBriefingRequestedRef.current) return
@@ -1154,7 +1270,7 @@ export function ChatTab({
         applyProactiveMemoriesFromPatch(data.memoryPatch)
         onMemoryPatch?.(data.memoryPatch)
       }
-      if (data.workoutPlan && !dietGenerationAfterWorkoutRef.current) {
+      if (!v3Enabled && data.workoutPlan && !dietGenerationAfterWorkoutRef.current) {
         dietGenerationAfterWorkoutRef.current = true
         void generateDietPlan(safeLanguage).catch((error) => {
           dietGenerationAfterWorkoutRef.current = false
@@ -1179,7 +1295,7 @@ export function ChatTab({
       proactiveInFlightRef.current = false
       if (forceArrivalBriefing) setIsSending(false)
     }
-  }, [applyProactiveMemoriesFromPatch, isMuted, language, localOpeningMessage, onMemoryPatch, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId])
+  }, [applyProactiveMemoriesFromPatch, isMuted, language, localOpeningMessage, onMemoryPatch, onWorkoutPlanUpdated, syncExpectedResponse, synthesizeAndPlay, userId, v3Enabled])
 
   // Após o card +100 XP: a chegada passa pelo backend, que decide se precisa
   // abrir contexto semanal antes de missão.
@@ -1196,6 +1312,7 @@ export function ChatTab({
   }, [dismissInitialXpCard])
 
   useEffect(() => {
+    if (v3Enabled) return
     if (initialXpGranted && !initialXpRewardSeen && !readInitialXpRewardSeen(userId)) {
       return
     }
@@ -1236,6 +1353,7 @@ export function ChatTab({
     memory,
     workoutPlan,
     userId,
+    v3Enabled,
   ])
 
   useEffect(() => {
@@ -1245,6 +1363,7 @@ export function ChatTab({
   }, [memory?.hasSeenChatOpening, userId])
 
   useEffect(() => {
+    if (v3Enabled) return
     const profileReadyForDiet = Boolean(
       memory?.heightCm &&
       memory?.weightKg &&
@@ -1263,22 +1382,21 @@ export function ChatTab({
     if (!calibrationComplete || !profileReadyForDiet || dietAlreadyHandled || dietGenerationAfterWorkoutRef.current) return
 
     dietGenerationAfterWorkoutRef.current = true
-    void generateDietPlan(validLang).then(() => {
-      onMemoryPatch?.({ dietGenerationStatus: "generated" })
-    }).catch((error) => {
+    void generateDietPlan(validLang).catch((error) => {
       dietGenerationAfterWorkoutRef.current = false
       console.warn(`Dieta base do GUTO não foi gerada após a calibragem: ${getApiErrorMessage(error)}`)
     })
-  }, [calibrationComplete, memory, onMemoryPatch, validLang])
+  }, [calibrationComplete, memory, validLang, v3Enabled])
 
   useEffect(() => {
+    if (v3Enabled) return
     if (showInitialXpCard) return
     void refreshProactiveMemories()
     const timer = window.setInterval(() => {
       void refreshProactiveMemories()
     }, PROACTIVE_CHECK_INTERVAL_MS)
     return () => window.clearInterval(timer)
-  }, [refreshProactiveMemories, showInitialXpCard])
+  }, [refreshProactiveMemories, showInitialXpCard, v3Enabled])
 
   const startRecording = async () => {
     if (isSending || isRecording || blockingProactiveCardRef.current) return
@@ -1400,11 +1518,136 @@ export function ChatTab({
     setIsRecording(false)
   }
 
+  const submitFirstContactAnswer = useCallback(async (
+    displayText: string,
+    options?: { hideUserBubble?: boolean },
+  ) => {
+    const firstContact = memory?.firstContact
+    const expectedStep = firstContact?.step
+    if (
+      !v3Enabled ||
+      firstContact?.status !== "IN_PROGRESS" ||
+      (expectedStep !== "food_restrictions" && expectedStep !== "training_limitations")
+    ) {
+      return false
+    }
+    if (firstContactMutationInFlightRef.current) return true
+
+    firstContactMutationInFlightRef.current = true
+    voiceQueueRef.current?.abort()
+    setIsSpeaking(false)
+    setIsSending(true)
+    setInput("")
+
+    const userMessage: Message = {
+      id: `u-first-contact-${Date.now()}`,
+      text: displayText,
+      isGuto: false,
+      timestamp: new Date(),
+    }
+    if (!options?.hideUserBubble) {
+      setMessages((previous) => {
+        const next = [...previous, userMessage]
+        messagesRef.current = next
+        return next
+      })
+    }
+
+    try {
+      applyOfficialFirstContactState(await respondGutoV3FirstContact(displayText, expectedStep))
+    } catch {
+      // A resposta pode ter sido persistida e a conexão ter caído antes do ACK.
+      // Releia a etapa oficial antes de liberar retry para nunca classificar a
+      // mesma resposta como se fosse da pergunta seguinte.
+      try {
+        const reconciled = applyOfficialFirstContactState(await getGutoV3State(createGutoTurnId(userId)))
+        if (reconciled.firstContact?.step === expectedStep) {
+          setMessages((previous) => appendMessagesWithoutDuplicateGuto(previous, [{
+            id: `g-first-contact-error-${Date.now()}`,
+            text: copy.connectionError,
+            isGuto: true,
+            timestamp: new Date(),
+            avatarEmotion: "default",
+          }]))
+        }
+      } catch {
+        setMessages((previous) => appendMessagesWithoutDuplicateGuto(previous, [{
+          id: `g-first-contact-error-${Date.now()}`,
+          text: copy.connectionError,
+          isGuto: true,
+          timestamp: new Date(),
+          avatarEmotion: "default",
+        }]))
+      }
+    } finally {
+      firstContactMutationInFlightRef.current = false
+      setIsSending(false)
+    }
+    return true
+  }, [applyOfficialFirstContactState, copy.connectionError, memory?.firstContact, userId, v3Enabled])
+
+  const confirmFirstContactContext = useCallback(async () => {
+    if (
+      !v3Enabled ||
+      officialFirstContact?.status !== "IN_PROGRESS" ||
+      officialFirstContact.step !== "confirmation" ||
+      firstContactMutationInFlightRef.current
+    ) return
+
+    firstContactMutationInFlightRef.current = true
+    setIsSending(true)
+    try {
+      const response = await confirmGutoV3FirstContact()
+      const official = gutoV3StateToMemory(response)
+      if (!hasConfirmedV3Context(official) || !plansShareConfirmedV3Context(official)) {
+        throw new Error("V3_CONTEXT_PLANS_NOT_ATOMIC")
+      }
+      applyOfficialFirstContactState(response)
+      setMessages((previous) => appendMessagesWithoutDuplicateGuto(previous, [{
+        id: `g-first-contact-completed-${official.confirmedContext?.version || Date.now()}`,
+        text: copy.contextConfirmed,
+        isGuto: true,
+        timestamp: new Date(),
+        avatarEmotion: "reward",
+      }]))
+    } catch {
+      try {
+        const reconciledResponse = await getGutoV3State(createGutoTurnId(userId))
+        const reconciled = gutoV3StateToMemory(reconciledResponse)
+        if (hasConfirmedV3Context(reconciled) && plansShareConfirmedV3Context(reconciled)) {
+          applyOfficialFirstContactState(reconciledResponse)
+          setMessages((previous) => appendMessagesWithoutDuplicateGuto(previous, [{
+            id: `g-first-contact-completed-${reconciled.confirmedContext?.version || Date.now()}`,
+            text: copy.contextConfirmed,
+            isGuto: true,
+            timestamp: new Date(),
+            avatarEmotion: "reward",
+          }]))
+        } else {
+          throw new Error("V3_CONTEXT_CONFIRMATION_NOT_COMMITTED")
+        }
+      } catch {
+        setMessages((previous) => appendMessagesWithoutDuplicateGuto(previous, [{
+          id: `g-first-contact-confirm-error-${Date.now()}`,
+          text: copy.connectionError,
+          isGuto: true,
+          timestamp: new Date(),
+          avatarEmotion: "default",
+        }]))
+      }
+    } finally {
+      firstContactMutationInFlightRef.current = false
+      setIsSending(false)
+    }
+  }, [applyOfficialFirstContactState, copy.connectionError, copy.contextConfirmed, officialFirstContact, userId, v3Enabled])
+
   const sendTextToGuto = useCallback(async (
     displayText: string,
     modelInput = displayText,
     options?: { hideUserBubble?: boolean; turnId?: string; resumePending?: boolean }
   ) => {
+    if (await submitFirstContactAnswer(displayText, { hideUserBubble: options?.hideUserBubble })) return
+    if (v3Enabled && isGutoV3FirstContactActive(memory?.firstContact)) return
     if (sendInFlightRef.current) return
     sendInFlightRef.current = true
 
@@ -1513,6 +1756,12 @@ export function ChatTab({
       )
       const fala = renderDecision.speech
       const messageId = `g-${Date.now()}`
+      const confirmedOfficialMemoryPatch = getConfirmedV3MemoryPatch(data)
+      let patchHasProactiveMemories = false
+      if (confirmedOfficialMemoryPatch) {
+        patchHasProactiveMemories = applyProactiveMemoriesFromPatch(confirmedOfficialMemoryPatch)
+        onMemoryPatch?.(confirmedOfficialMemoryPatch)
+      }
       if (data.activeContext !== undefined) {
         activeContextRef.current = data.activeContext || null
         onMemoryPatch?.({ activeContext: data.activeContext || null })
@@ -1541,11 +1790,18 @@ export function ChatTab({
       }
 
       setMessages((prev) => appendMessagesWithoutDuplicateGuto(prev, [gutoMessage]))
-      if (data?.workoutPlan) {
+      if (data?.workoutPlan && !v3Enabled) {
         onWorkoutPlanUpdated?.(data.workoutPlan)
+      } else if (
+        v3Enabled &&
+        confirmedOfficialMemoryPatch &&
+        hasConfirmedV3Context(confirmedOfficialMemoryPatch) &&
+        plansShareConfirmedV3Context(confirmedOfficialMemoryPatch)
+      ) {
+        onWorkoutPlanUpdated?.(confirmedOfficialMemoryPatch.lastWorkoutPlan || null)
       }
-      const patchHasProactiveMemories = applyProactiveMemoriesFromPatch(data?.memoryPatch)
-      if (data?.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
+      if (!confirmedOfficialMemoryPatch && data?.memoryPatch && Object.keys(data.memoryPatch).length > 0) {
+        patchHasProactiveMemories = applyProactiveMemoriesFromPatch(data.memoryPatch)
         onMemoryPatch?.(data.memoryPatch)
       }
       if (data?.acao === "changeLanguage" && data?.memoryPatch?.language) {
@@ -1567,7 +1823,7 @@ export function ChatTab({
       const dietReadyFromBackend = data?.memoryPatch?.dietGenerationStatus === "ready_to_generate"
       if (closedWorkoutFlow) {
         suppressProactivityUntilRef.current = Date.now() + PROACTIVITY_SUPPRESS_AFTER_WORKOUT_MS
-        if (dietReadyFromBackend && !dietGenerationAfterWorkoutRef.current) {
+        if (!v3Enabled && dietReadyFromBackend && !dietGenerationAfterWorkoutRef.current) {
           dietGenerationAfterWorkoutRef.current = true
           void generateDietPlan(safeLanguage).catch((error) => {
             dietGenerationAfterWorkoutRef.current = false
@@ -1613,6 +1869,7 @@ export function ChatTab({
     copy,
     isMuted,
     language,
+    memory?.firstContact,
     onChangeLanguage,
     onMemoryPatch,
     onOpenPrivacySettings,
@@ -1624,8 +1881,9 @@ export function ChatTab({
     stopTypingLoop,
     syncExpectedResponse,
     triggerProactivityExtraction,
+    submitFirstContactAnswer,
     userId,
-    userName,
+    v3Enabled,
   ])
 
   useEffect(() => {
@@ -1799,6 +2057,7 @@ export function ChatTab({
 
   const handleSend = async () => {
     if (blockingProactiveCardRef.current) return
+    if (v3Enabled && isGutoV3FirstContactActive(memory?.firstContact) && memory?.firstContact?.step === "confirmation") return
     if (!input.trim() || isSending) return
     const text = input.trim()
     await sendTextToGuto(text, wrapWithActiveContext(text))
@@ -1854,6 +2113,11 @@ export function ChatTab({
     !showInitialXpCard && hasActionableProactiveMemories(proactiveMemories, memory?.activeConversationContext || null)
   const hasBlockingProactiveCard = showProactiveBanner &&
     (actionableProactive.pendingConfirmation.length > 0 || actionableProactive.awaitingDiscard.length > 0)
+  const firstContactNeedsConfirmation = Boolean(
+    v3Enabled &&
+    memory?.firstContact?.status === "IN_PROGRESS" &&
+    memory.firstContact.step === "confirmation"
+  )
   useEffect(() => {
     blockingProactiveCardRef.current = hasBlockingProactiveCard
   }, [hasBlockingProactiveCard])
@@ -2308,7 +2572,21 @@ export function ChatTab({
       )}
 
       <div className="w-full">
-        {hasBlockingProactiveCard ? (
+        {firstContactNeedsConfirmation ? (
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.97 }}
+            onClick={() => {
+              gutoAudio.playGutoFeedback("tap")
+              void confirmFirstContactContext()
+            }}
+            disabled={isSending}
+            data-testid="guto-first-contact-confirm"
+            className="guto-primary-button min-h-[58px] w-full rounded-[18px] disabled:opacity-45"
+          >
+            {isSending ? <Loader2 className="mx-auto h-6 w-6 animate-spin" /> : copy.confirmContext}
+          </motion.button>
+        ) : hasBlockingProactiveCard ? (
           <div
             data-testid="guto-chat-card-block"
             className="grid min-h-[58px] place-items-center rounded-[18px] border border-[rgba(82,231,255,0.48)] bg-white/86 px-4 py-3 text-center font-mono text-[10px] font-black uppercase tracking-[0.14em] text-(--guto-navy) shadow-[0_8px_24px_rgba(82,231,255,0.14)]"

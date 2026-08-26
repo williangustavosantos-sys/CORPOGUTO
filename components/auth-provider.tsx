@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { AuthUser, getMe, LoginResponse, logout as apiLogout } from "@/lib/api/auth"
-import { setApiAuthToken } from "@/lib/api/client"
+import { getApiAuthTokenStorageKey, setApiAuthToken } from "@/lib/api/client"
 
 interface AuthContextType {
   user: AuthUser | null
@@ -18,7 +18,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 function readStoredToken() {
   try {
-    return localStorage.getItem("guto-auth-token")
+    return localStorage.getItem(getApiAuthTokenStorageKey())
   } catch {
     return null
   }
@@ -26,7 +26,7 @@ function readStoredToken() {
 
 function writeStoredToken(token: string) {
   try {
-    localStorage.setItem("guto-auth-token", token)
+    localStorage.setItem(getApiAuthTokenStorageKey(), token)
   } catch {
     // Safari/private browsing can block storage; keep the session in React state.
   }
@@ -34,7 +34,7 @@ function writeStoredToken(token: string) {
 
 function removeStoredToken() {
   try {
-    localStorage.removeItem("guto-auth-token")
+    localStorage.removeItem(getApiAuthTokenStorageKey())
   } catch {
     // Storage is optional for first-run access.
   }
@@ -73,11 +73,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const logout = () => {
+    const tokenToRevoke = token
+    void apiLogout(tokenToRevoke).catch(() => {})
     setApiAuthToken(null)
     removeStoredToken()
     setToken(null)
     setUser(null)
-    void apiLogout().catch(() => {})
     router.push("/login")
   }
 

@@ -1,11 +1,7 @@
 import type { GutoMemory } from "@/lib/api/guto"
 
 export function hasDurablePostPactArtifacts(memory: GutoMemory | null | undefined): memory is GutoMemory {
-  return Boolean(
-    memory?.initialXpGranted &&
-    memory.lastWorkoutPlan?.exercises?.length &&
-    memory.lastDietPlan?.meals?.length
-  )
+  return Boolean(memory?.initialXpGranted)
 }
 
 export async function recoverDurablePostPactArtifacts(options: {

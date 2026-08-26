@@ -343,6 +343,11 @@ class GutoVoiceService {
     source: GutoVoiceSource
     cacheKey: string
   }): Promise<GutoVoiceBankRecord | null> {
+    if (process.env.NEXT_PUBLIC_GUTO_V3_ENABLED === "true") {
+      console.warn("[GUTO_V3_LEGACY_VOICE_BLOCKED]", { language, source })
+      return null
+    }
+
     try {
       const token = window.localStorage.getItem("guto-auth-token")
       const response = await fetch(`${API_URL}/voz`, {

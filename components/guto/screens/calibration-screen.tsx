@@ -4,30 +4,36 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import Image from "next/image"
 import { motion } from "framer-motion"
 import { createPortal } from "react-dom"
-import { City, Country } from "country-state-city"
 import { translations, type ValidLanguage } from "../translations"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface CalibrationProfile {
+export interface CalibrationProfile {
   userAge?: number
   biologicalSex?: "female" | "male"
   trainingLevel?: "beginner" | "returning" | "consistent" | "advanced"
   trainingGoal?: "consistency" | "fat_loss" | "muscle_gain" | "conditioning" | "mobility_health"
-  preferredTrainingLocation?: "gym" | "home" | "park" | "mixed"
-  trainingPathology?: string
-  country?: string
-  countryCode?: string
-  city?: string
+  trainingFrequencyDaysPerWeek?: number
   heightCm?: number
   weightKg?: number
-  foodRestrictions?: string
 }
 
 type TrainingStatus = "beginner" | "returning" | "consistent" | "advanced"
 type GoalKey = "consistency" | "fat_loss" | "muscle_gain" | "conditioning" | "mobility_health"
-type LocationKey = "gym" | "home" | "park" | "mixed"
 type SelectOption = { value: string; label: string }
+
+export function isCalibrationProfileComplete(profile: CalibrationProfile): boolean {
+  return Boolean(
+    profile.biologicalSex &&
+    profile.userAge && profile.userAge >= 14 && profile.userAge <= 99 &&
+    profile.trainingLevel &&
+    profile.trainingGoal &&
+    profile.trainingFrequencyDaysPerWeek &&
+    profile.trainingFrequencyDaysPerWeek >= 1 && profile.trainingFrequencyDaysPerWeek <= 7 &&
+    profile.heightCm && profile.heightCm >= 100 && profile.heightCm <= 250 &&
+    profile.weightKg && profile.weightKg >= 30 && profile.weightKg <= 300
+  )
+}
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
@@ -55,17 +61,12 @@ export function CalibrationScreen({
   })
   const [ageInput, setAgeInput] = useState(initialProfile?.userAge ? String(initialProfile.userAge) : "")
   const [trainingStatus, setTrainingStatus] = useState<TrainingStatus | null>(initialProfile?.trainingLevel ?? null)
-  const [pathology, setPathology] = useState(initialProfile?.trainingPathology ?? "")
   const [goal, setGoal] = useState<GoalKey | null>(initialProfile?.trainingGoal ?? null)
-  const [location, setLocation] = useState<LocationKey | null>(initialProfile?.preferredTrainingLocation ?? null)
-  const [country, setCountry] = useState(initialProfile?.country ?? "")
-  const [countryCode, setCountryCode] = useState(initialProfile?.countryCode ?? "")
-  const [city, setCity] = useState(initialProfile?.city ?? "")
+  const [trainingFrequency, setTrainingFrequency] = useState<number | null>(
+    initialProfile?.trainingFrequencyDaysPerWeek ?? null
+  )
   const [heightInput, setHeightInput] = useState(initialProfile?.heightCm ? String(initialProfile.heightCm) : "")
   const [weightInput, setWeightInput] = useState(initialProfile?.weightKg ? String(initialProfile.weightKg) : "")
-  const [foodRestrictions, setFoodRestrictions] = useState(
-    () => initialProfile?.foodRestrictions?.trim() || ""
-  )
 
   const ageNum = parseInt(ageInput, 10)
   const isAgeValid = !isNaN(ageNum) && ageNum >= 14 && ageNum <= 99
@@ -73,23 +74,14 @@ export function CalibrationScreen({
   const isHeightValid = !isNaN(heightNum) && heightNum >= 100 && heightNum <= 250
   const weightNum = parseFloat(weightInput.replace(",", "."))
   const isWeightValid = !isNaN(weightNum) && weightNum >= 30 && weightNum <= 300
-  const hasCountry = country.trim().length >= 2
-  const hasCity = city.trim().length >= 2
-  const hasPathologyAnswer = pathology.trim().length >= 2
-  const hasFoodAnswer = foodRestrictions.trim().length >= 2
   const isComplete = Boolean(
     biologicalSex &&
     isAgeValid &&
     trainingStatus &&
     goal &&
-    location &&
+    trainingFrequency &&
     isHeightValid &&
-    isWeightValid &&
-    hasCountry &&
-    countryCode &&
-    hasCity &&
-    hasPathologyAnswer &&
-    hasFoodAnswer
+    isWeightValid
   )
 
   const handleSubmit = () => {
@@ -100,37 +92,12 @@ export function CalibrationScreen({
       userAge: ageNum,
       trainingLevel: trainingStatus ?? undefined,
       trainingGoal: goal ?? undefined,
-      preferredTrainingLocation: location ?? undefined,
-      trainingPathology: pathology.trim(),
-      country: country.trim(),
-      countryCode,
-      city: city.trim(),
+      trainingFrequencyDaysPerWeek: trainingFrequency ?? undefined,
       heightCm: isHeightValid ? heightNum : undefined,
       weightKg: isWeightValid ? weightNum : undefined,
-      foodRestrictions: foodRestrictions.trim(),
     })
   }
 
-  const countryOptions = useMemo(() => getCountryOptions(language), [language])
-  const cityOptions = useMemo(() => {
-    if (!countryCode) return []
-    const seen = new Set<string>()
-    return (City.getCitiesOfCountry(countryCode) ?? [])
-      .map((cityOption) => {
-        const localizedName = getLocalizedCityName(cityOption.name, language)
-        return {
-          value: localizedName,
-          label: cityOption.stateCode ? `${localizedName} · ${cityOption.stateCode}` : localizedName,
-        }
-      })
-      .filter((option) => {
-        const key = `${option.value}|${option.label}`
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-      })
-      .sort((a, b) => a.label.localeCompare(b.label, language))
-  }, [countryCode, language])
   const ageOptions = useMemo(() => {
     return Array.from({ length: 86 }, (_, index) => {
       const age = String(index + 14)
@@ -150,45 +117,10 @@ export function CalibrationScreen({
       return { value: height, label: height }
     })
   }, [])
-  const avoidFoodLabel = {
-    "pt-BR": "NÃO COMO",
-    "en-US": "I DO NOT EAT",
-    "it-IT": "NON MANGIO",
-  }[language]
-  const avoidFoodHint = {
-    "pt-BR": "Intolerância, alergia ou não gosto",
-    "en-US": "Intolerance, allergy or dislike",
-    "it-IT": "Intolleranza, allergia o non mi piace",
-  }[language]
-  const noPainLabel = {
-    "pt-BR": "SEM DOR",
-    "en-US": "NO PAIN",
-    "it-IT": "NESSUN DOLORE",
-  }[language]
-  const noFoodRestrictionLabel = {
-    "pt-BR": "COMO DE TUDO",
-    "en-US": "I EAT EVERYTHING",
-    "it-IT": "MANGIO TUTTO",
-  }[language]
   const scanTitle = {
     "pt-BR": "CALIBRAGEM INICIAL",
     "en-US": "INITIAL CALIBRATION",
     "it-IT": "CALIBRAZIONE INIZIALE",
-  }[language]
-  const countryLabel = {
-    "pt-BR": "PAÍS",
-    "en-US": "COUNTRY",
-    "it-IT": "PAESE",
-  }[language]
-  const cityLabel = {
-    "pt-BR": "CIDADE",
-    "en-US": "CITY",
-    "it-IT": "CITTÀ",
-  }[language]
-  const chooseLabel = {
-    "pt-BR": "Selecionar",
-    "en-US": "Select",
-    "it-IT": "Seleziona",
   }[language]
   const doneLabel = {
     "pt-BR": "Pronto",
@@ -251,51 +183,6 @@ export function CalibrationScreen({
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.36, delay: 0.08 }}
         >
-          <CalibrationPlate className="shrink-0 p-2">
-            <div className="grid grid-cols-2 gap-2">
-              <SearchSelect
-                label={countryLabel}
-                value={country}
-                options={countryOptions}
-                placeholder={chooseLabel}
-                searchPlaceholder={searchLabel}
-                closeLabel={doneLabel}
-                emptyLabel={noOptionsLabel}
-                onSelect={(option) => {
-                  setCountry(option.label)
-                  setCountryCode(option.value)
-                  setCity("")
-                }}
-              />
-              <SearchSelect
-                label={cityLabel}
-                value={city}
-                options={cityOptions}
-                placeholder={chooseLabel}
-                searchPlaceholder={searchLabel}
-                closeLabel={doneLabel}
-                emptyLabel={noOptionsLabel}
-                disabled={!countryCode || cityOptions.length === 0}
-                onSelect={(option) => setCity(option.value)}
-              />
-            </div>
-            <div className="mt-1.5">
-              <CompactTextInput
-                label={avoidFoodLabel}
-                labelHint={avoidFoodHint}
-                value={foodRestrictions}
-                onChange={setFoodRestrictions}
-                placeholder={t.restrictionsPlaceholder}
-              />
-              <MiniChip
-                label={noFoodRestrictionLabel}
-                active={foodRestrictions.trim() === noFoodRestrictionLabel}
-                onClick={() => setFoodRestrictions(noFoodRestrictionLabel)}
-                className="mt-1 w-full"
-              />
-            </div>
-          </CalibrationPlate>
-
           <div className="grid shrink-0 grid-cols-[92px_minmax(0,1fr)_92px] items-stretch gap-1.5 min-[390px]:grid-cols-[98px_minmax(0,1fr)_98px]">
             <CalibrationPlate className="flex min-w-0 flex-col justify-center gap-2 p-2">
               <div className="grid grid-cols-1 gap-1">
@@ -315,7 +202,7 @@ export function CalibrationScreen({
               />
             </CalibrationPlate>
 
-            <div className="guto-calibration-hero relative grid min-h-[clamp(168px,31dvh,208px)] min-w-0 place-items-center overflow-hidden rounded-[24px]">
+            <div className="guto-calibration-hero relative grid min-h-[clamp(184px,34dvh,232px)] min-w-0 place-items-center overflow-hidden rounded-[24px]">
               <div className="absolute inset-0 bg-[radial-gradient(60%_55%_at_50%_55%,rgba(82,231,255,0.32),transparent_72%)] blur-[8px]" />
               <div className="absolute bottom-2 left-1/2 h-2.5 w-[130px] -translate-x-1/2 rounded-full bg-[radial-gradient(ellipse,rgba(82,231,255,0.6),transparent_70%)] blur-[3px]" />
               <motion.div
@@ -329,7 +216,7 @@ export function CalibrationScreen({
                   aria-hidden="true"
                   width={132}
                   height={320}
-                  className="h-[clamp(174px,32dvh,218px)] w-auto object-contain drop-shadow-[0_0_18px_rgba(82,231,255,0.65)]"
+                  className="h-[clamp(190px,35dvh,238px)] w-auto object-contain drop-shadow-[0_0_18px_rgba(82,231,255,0.65)]"
                   priority
                 />
               </motion.div>
@@ -360,7 +247,7 @@ export function CalibrationScreen({
             </CalibrationPlate>
           </div>
 
-          <CalibrationPlate className="flex shrink-0 flex-col gap-1.5 p-2">
+          <CalibrationPlate className="flex shrink-0 flex-col gap-2 p-2.5">
             <div>
               <CyanLabel text={`${t.statusLabel}:`} />
               <div className="mt-1 grid grid-cols-4 gap-1">
@@ -371,18 +258,22 @@ export function CalibrationScreen({
               </div>
             </div>
 
-            <CompactTextInput
-              label={t.pathologySection}
-              value={pathology}
-              onChange={setPathology}
-              placeholder={t.pathologyPlaceholder}
-            />
-            <MiniChip
-              label={noPainLabel}
-              active={pathology.trim() === noPainLabel}
-              onClick={() => setPathology(noPainLabel)}
-              className="w-full"
-            />
+            <div>
+              <CyanLabel text={`${t.frequencyLabel}:`} />
+              <div className="mt-1 grid grid-cols-7 gap-1">
+                {t.frequencyOptions.map((label, index) => {
+                  const days = index + 1
+                  return (
+                    <MiniChip
+                      key={days}
+                      label={label}
+                      active={trainingFrequency === days}
+                      onClick={() => setTrainingFrequency(days)}
+                    />
+                  )
+                })}
+              </div>
+            </div>
 
             <div>
               <CyanLabel text={t.objectiveSection} />
@@ -399,15 +290,6 @@ export function CalibrationScreen({
                         : undefined
                     }
                   />
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <CyanLabel text={t.locationLabel} />
-              <div className="mt-1 grid grid-cols-4 gap-1">
-                {(Object.entries(t.locationOptions) as [LocationKey, string][]).map(([key, label]) => (
-                  <MiniChip key={key} label={label} active={location === key} onClick={() => setLocation(key)} />
                 ))}
               </div>
             </div>
@@ -463,49 +345,11 @@ function Divider() {
   return <div className="h-px bg-[rgba(82,231,255,0.4)]" />
 }
 
-function getCountryOptions(language: ValidLanguage): SelectOption[] {
-  const names = new Intl.DisplayNames([language], { type: "region" })
-  return Country.getAllCountries()
-    .map((countryOption) => ({
-      value: countryOption.isoCode,
-      label: names.of(countryOption.isoCode) ?? countryOption.name,
-    }))
-    .sort((a, b) => a.label.localeCompare(b.label, language))
-}
-
 function normalizeSearchText(value: string) {
   return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-}
-
-const LOCALIZED_CITY_NAMES: Record<ValidLanguage, Record<string, string>> = {
-  "pt-BR": {
-    Florence: "Florença",
-    Genoa: "Gênova",
-    Milan: "Milão",
-    Naples: "Nápoles",
-    Rome: "Roma",
-    Turin: "Turim",
-    Venice: "Veneza",
-    Verona: "Verona",
-  },
-  "it-IT": {
-    Florence: "Firenze",
-    Genoa: "Genova",
-    Milan: "Milano",
-    Naples: "Napoli",
-    Rome: "Roma",
-    Turin: "Torino",
-    Venice: "Venezia",
-    Verona: "Verona",
-  },
-  "en-US": {},
-}
-
-function getLocalizedCityName(cityName: string, language: ValidLanguage) {
-  return LOCALIZED_CITY_NAMES[language][cityName] ?? cityName
 }
 
 function SearchSelect({
@@ -707,49 +551,6 @@ function SearchSelect({
           document.body
         )}
     </div>
-  )
-}
-
-function CompactTextInput({
-  label,
-  labelHint,
-  value,
-  onChange,
-  placeholder,
-  autoComplete,
-}: {
-  label: string
-  labelHint?: string
-  value: string
-  onChange: (v: string) => void
-  placeholder: string
-  autoComplete?: string
-}) {
-  return (
-    <label className="block min-w-0">
-      <CyanLabel text={label} size="xs" />
-      {labelHint && (
-        <p className="mt-0.5 truncate font-mono text-[7px] font-semibold uppercase tracking-[0.14em] text-[rgba(90,124,168,0.62)]">
-          {labelHint}
-        </p>
-      )}
-      <input
-        type="text"
-        inputMode="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        autoComplete={autoComplete || "off"}
-        autoCorrect="off"
-        spellCheck={false}
-        enterKeyHint="done"
-        className="mt-1 h-7 w-full min-w-0 rounded-full border bg-white/80 px-3 font-mono text-[10px] font-bold text-(--guto-navy) outline-none placeholder:text-[rgba(13,35,65,0.25)]"
-        style={{
-          borderColor: "var(--guto-cyan)",
-          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.95), 0 0 8px rgba(82,231,255,0.18)",
-        }}
-      />
-    </label>
   )
 }
 

@@ -20,13 +20,13 @@ function memory(ready: boolean): GutoMemory {
     xpEvents: [],
     proactiveSent: {},
     initialXpRewardSeen: false,
-    lastWorkoutPlan: ready ? { focus: "Treino", dateLabel: "hoje", scheduledFor: "hoje", summary: "", exercises: [{ id: "x" }] } as GutoMemory["lastWorkoutPlan"] : null,
-    lastDietPlan: ready ? { userId: "pact-user", generatedAt: "hoje", country: "IT", macros: {} as never, meals: [{ id: "lunch" }] } as unknown as GutoMemory["lastDietPlan"] : null,
+    lastWorkoutPlan: null,
+    lastDietPlan: null,
   }
 }
 
 describe("pact commit recovery", () => {
-  it("resposta perdida faz um único POST e avança quando GET confirma XP + treino + dieta", async () => {
+  it("resposta perdida faz um único POST e avança quando GET confirma apenas o pacto", async () => {
     let commits = 0
     let reads = 0
     const result = await commitPactOnceAndRecover({

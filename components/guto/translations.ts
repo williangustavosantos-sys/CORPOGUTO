@@ -65,6 +65,8 @@ export interface TranslationDictionary {
     errorRequired: string;
     statusLabel: string;
     statusChips: { paused: string; returning: string; active: string; advanced: string };
+    frequencyLabel: string;
+    frequencyOptions: string[];
     pathologySection: string;
     objectiveSection: string;
     objectiveChips: { fat_loss: string; muscle_gain: string; conditioning: string; mobility_health: string; consistency: string };
@@ -207,8 +209,10 @@ export const translations: Record<ValidLanguage, TranslationDictionary> = {
       locationOptions: { gym: "Academia", home: "Casa", park: "Parque", mixed: "Misturo" },
       submit: "Calibrar GUTO",
       errorRequired: "Falta calibrar isso antes de seguir.",
-      statusLabel: "ESTADO ATUAL",
-      statusChips: { paused: "Parado", returning: "Voltando", active: "Treinando", advanced: "Avançado" },
+      statusLabel: "NÍVEL",
+      statusChips: { paused: "Iniciante", returning: "Retornando", active: "Consistente", advanced: "Avançado" },
+      frequencyLabel: "FREQUÊNCIA SEMANAL",
+      frequencyOptions: ["1D", "2D", "3D", "4D", "5D", "6D", "7D"],
       pathologySection: "LIMITAÇÃO PATOLOGIA",
       objectiveSection: "OBJETIVO",
       objectiveChips: { fat_loss: "Emagrecer", muscle_gain: "Hipertrofia", conditioning: "Condicionamento", mobility_health: "Saúde", consistency: "Consistência" },
@@ -340,8 +344,10 @@ export const translations: Record<ValidLanguage, TranslationDictionary> = {
       locationOptions: { gym: "Palestra", home: "Casa", park: "Parco", mixed: "Misto" },
       submit: "Calibra GUTO",
       errorRequired: "Calibra questo prima di continuare.",
-      statusLabel: "STATO ATTUALE",
-      statusChips: { paused: "Fermo", returning: "Rientro", active: "In allenamento", advanced: "Avanzato" },
+      statusLabel: "LIVELLO",
+      statusChips: { paused: "Principiante", returning: "Rientro", active: "Costante", advanced: "Avanzato" },
+      frequencyLabel: "FREQUENZA SETTIMANALE",
+      frequencyOptions: ["1G", "2G", "3G", "4G", "5G", "6G", "7G"],
       pathologySection: "DOLORE E LIMITI",
       objectiveSection: "OBIETTIVO",
       objectiveChips: { fat_loss: "Dimagrire", muscle_gain: "Ipertrofia", conditioning: "Condizionamento", mobility_health: "Salute", consistency: "Costanza" },
@@ -473,8 +479,10 @@ export const translations: Record<ValidLanguage, TranslationDictionary> = {
       locationOptions: { gym: "Gym", home: "Home", park: "Park", mixed: "Mixed" },
       submit: "Calibrate GUTO",
       errorRequired: "Calibrate this before moving on.",
-      statusLabel: "CURRENT STATUS",
-      statusChips: { paused: "Inactive", returning: "Returning", active: "Active", advanced: "Advanced" },
+      statusLabel: "LEVEL",
+      statusChips: { paused: "Beginner", returning: "Returning", active: "Consistent", advanced: "Advanced" },
+      frequencyLabel: "WEEKLY FREQUENCY",
+      frequencyOptions: ["1D", "2D", "3D", "4D", "5D", "6D", "7D"],
       pathologySection: "PAIN & LIMITATIONS",
       objectiveSection: "GOAL",
       objectiveChips: { fat_loss: "Lose Fat", muscle_gain: "Hypertrophy", conditioning: "Conditioning", mobility_health: "Health", consistency: "Consistency" },

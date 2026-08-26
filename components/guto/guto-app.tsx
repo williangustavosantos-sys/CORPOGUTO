@@ -15,13 +15,13 @@ import { DietTab } from "./tabs/diet-tab"
 import { EvolutionsTab } from "./tabs/evolutions-tab"
 import { MissionTab } from "./tabs/mission-tab"
 import { PathTab } from "./tabs/path-tab"
-import { CalibrationScreen } from "./screens/calibration-screen"
+import { CalibrationScreen, type CalibrationProfile } from "./screens/calibration-screen"
 import { ConsentScreen } from "./screens/consent-screen"
 import { LanguageScreen } from "./screens/language-screen"
 import type { MissionExercise } from "./view-models"
 import { WorkoutValidationFlow } from "./validation/workout-validation-flow"
 import { getApiErrorMessage } from "@/lib/api/client"
-import { acceptGutoConsent, getGutoMemory, saveGutoMemory, trackGutoEvent, validateGutoName, type DietFood, type DietMeal, type GutoMemory, type GutoNameValidation, type GutoTelemetryEvent, type GutoWorkoutPlan } from "@/lib/api/guto"
+import { acceptGutoConsent, getGutoMemory, hasConfirmedV3Context, isGutoV3Enabled, plansShareConfirmedV3Context, saveGutoMemory, saveGutoV3Calibration, trackGutoEvent, validateGutoName, type DietFood, type DietMeal, type GutoMemory, type GutoNameValidation, type GutoTelemetryEvent, type GutoWorkoutPlan } from "@/lib/api/guto"
 import { useAuth } from "@/components/auth-provider"
 import { getInvite, claimInvite, logout, deleteOwnAccount, revokeConsent, type InvitePreview } from "@/lib/api/auth"
 import type { EvolutionStage, SupportedLanguage } from "@/types/contract"
@@ -632,6 +632,19 @@ function hasMemoryConsent(memory?: GutoMemory | null) {
   return Boolean(memory?.consentHealthFitness && memory?.acceptedTerms)
 }
 
+function isOfficialV3Memory(memory?: Partial<GutoMemory> | null): memory is GutoMemory {
+  return Boolean(
+    memory &&
+    typeof memory.userId === "string" &&
+    typeof memory.name === "string" &&
+    typeof memory.totalXp === "number" &&
+    Array.isArray(memory.xpEvents) &&
+    Array.isArray(memory.completedWorkoutDates) &&
+    Array.isArray(memory.adaptedMissionDates) &&
+    Array.isArray(memory.missedMissionDates),
+  )
+}
+
 function calibrationInitialProfileFromMemory(memory?: GutoMemory | null) {
   if (!memory) return null
   return {
@@ -642,14 +655,9 @@ function calibrationInitialProfileFromMemory(memory?: GutoMemory | null) {
         : undefined,
     trainingLevel: memory.trainingLevel,
     trainingGoal: memory.trainingGoal,
-    preferredTrainingLocation: memory.preferredTrainingLocation,
-    trainingPathology: memory.trainingPathology,
-    country: memory.country,
-    countryCode: memory.countryCode,
-    city: memory.city,
+    trainingFrequencyDaysPerWeek: memory.trainingFrequencyDaysPerWeek,
     heightCm: memory.heightCm,
     weightKg: memory.weightKg,
-    foodRestrictions: memory.foodRestrictions,
   }
 }
 
@@ -958,6 +966,39 @@ export function GutoApp({
     [gutoUserId, selectedLanguage, user?.userId]
   )
 
+  const applyOfficialV3Memory = useCallback((official: GutoMemory) => {
+    memoryRef.current = official
+    setMemory(official)
+    setEvolution(resolveEvolutionStage(official.totalXp || 0))
+
+    const sharedContextReady = hasConfirmedV3Context(official) && plansShareConfirmedV3Context(official)
+    setWorkoutPlan(sharedContextReady ? official.lastWorkoutPlan || null : null)
+  }, [])
+
+  const reconcileV3OfficialState = useCallback(async () => {
+    if (!isGutoV3Enabled()) return null
+    const activeUserId = isValidGutoUserId(gutoUserId) ? gutoUserId : user?.userId
+    if (!isValidGutoUserId(activeUserId)) return null
+
+    const official = await getGutoMemory(activeUserId)
+    applyOfficialV3Memory(official)
+    return official
+  }, [applyOfficialV3Memory, gutoUserId, user?.userId])
+
+  const applyMemoryPatch = useCallback((patch: Partial<GutoMemory>) => {
+    if (isGutoV3Enabled() && isOfficialV3Memory(patch)) {
+      applyOfficialV3Memory(patch)
+      return
+    }
+
+    setMemory((previous) => {
+      if (!previous) return previous
+      const next = { ...previous, ...patch }
+      memoryRef.current = next
+      return next
+    })
+  }, [applyOfficialV3Memory])
+
   const trackBehaviorEvent = useCallback(
     (event: GutoTelemetryEvent, metadata?: Record<string, unknown>) => {
       if (!user?.userId) return
@@ -1188,11 +1229,15 @@ export function GutoApp({
         if (loadedMemory) {
           setMemory(loadedMemory)
           setEvolution(resolveEvolutionStage(loadedMemory.totalXp || 0))
-          // Prefer coach-set weekly plan for today over the GUTO-generated lastWorkoutPlan
+          // No V3, planos só ficam visíveis depois do First Contact confirmar
+          // treino e dieta de forma atômica na mesma versão de contexto.
+          const v3SharedContextReady = hasConfirmedV3Context(loadedMemory) && plansShareConfirmedV3Context(loadedMemory)
           const weekDays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const
           const todayKey = weekDays[new Date().getDay()]
           const todayWeeklyWorkout = loadedMemory.weeklyWorkoutPlan?.days?.[todayKey]
-          if (todayWeeklyWorkout?.exercises?.length) {
+          if (isGutoV3Enabled()) {
+            setWorkoutPlan(v3SharedContextReady ? loadedMemory.lastWorkoutPlan || null : null)
+          } else if (todayWeeklyWorkout?.exercises?.length) {
             setWorkoutPlan(todayWeeklyWorkout)
           } else if (loadedMemory.lastWorkoutPlan?.exercises?.length) {
             setWorkoutPlan(loadedMemory.lastWorkoutPlan)
@@ -1329,40 +1374,54 @@ export function GutoApp({
 
       gutoAudio.playGutoFeedback("hold_complete")
       effectRegistry.emit("whiteout")
-      persistProfile({
-        language: finalLanguage,
-        userName: finalName,
-        calibrationComplete: true,
-        pactAccepted: true,
-        onboardingComplete: true,
-      })
-      trackBehaviorEvent("pact_completed", { finalLanguage })
       setPactProgress(100)
       setIsHoldingPact(false)
       setWhiteout(true)
-      schedule(() => {
-        setStage("system")
-      }, 140)
-      schedule(() => {
-        setWhiteout(false)
-        setPactProgress(0)
-      }, 860)
 
-      void persistMemory({
-        name: finalName,
-        language: finalLanguage,
-        trainedToday: false,
-        xpEvent: "grant_initial_xp",
-      }, { optimistic: true }).then((updated) => {
-        if (updated) {
-          setMemory(updated)
-          setEvolution(resolveEvolutionStage(updated.totalXp || 0))
+      try {
+        const updated = await persistMemory({
+          name: finalName,
+          language: finalLanguage,
+          trainedToday: false,
+          xpEvent: "grant_initial_xp",
+        }, { optimistic: false })
+        if (!updated) throw new Error("V3_PACT_PERSISTENCE_FAILED")
+
+        const official = isGutoV3Enabled()
+          ? await reconcileV3OfficialState()
+          : updated
+        if (!official) throw new Error("V3_STATE_RECONCILIATION_FAILED")
+        if (isGutoV3Enabled() && !official.initialXpGranted) {
+          throw new Error("V3_PACT_STATE_NOT_CONFIRMED")
         }
-      }).catch((error) => {
-        console.warn(`Pacto do GUTO sincronizado em segundo plano: ${getApiErrorMessage(error)}`)
-      })
+
+        if (!isGutoV3Enabled()) applyOfficialV3Memory(official)
+        persistProfile({
+          language: finalLanguage,
+          userName: finalName,
+          calibrationComplete: true,
+          pactAccepted: true,
+          onboardingComplete: true,
+        })
+        if (!isGutoV3Enabled()) trackBehaviorEvent("pact_completed", { finalLanguage })
+        schedule(() => {
+          setStage("system")
+        }, 140)
+        schedule(() => {
+          setWhiteout(false)
+          setPactProgress(0)
+        }, 860)
+      } catch (error) {
+        pactCompleteRef.current = false
+        setIsHoldingPact(false)
+        setPactProgress(0)
+        setWhiteout(false)
+        gutoAudio.playGutoFeedback("error")
+        setProfileSaveError(stageCopy[finalLanguage].profileSaveError)
+        console.warn(`Pacto do GUTO não reconciliado: ${getApiErrorMessage(error)}`)
+      }
     },
-    [effectRegistry, persistMemory, persistProfile, schedule, setMemory, trackBehaviorEvent]
+    [applyOfficialV3Memory, effectRegistry, persistMemory, persistProfile, reconcileV3OfficialState, schedule, trackBehaviorEvent]
   )
 
   const handleConsentAccepted = useCallback(async () => {
@@ -1577,26 +1636,60 @@ export function GutoApp({
   )
 
   const handleCalibrationComplete = useCallback(
-    async (calibration: GutoMemoryPayload) => {
+    async (calibration: CalibrationProfile) => {
       setProfileSaveError(null)
-      const updated = await persistMemory({
-        ...calibration,
-        language: selectedLanguage,
-        foodRestrictions: calibration.foodRestrictions?.trim(),
-        trainingPathology: calibration.trainingPathology?.trim(),
-        trainingStatus: calibration.trainingLevel,
-        trainingLimitations: calibration.trainingPathology?.trim(),
-      }, { optimistic: false })
+      let updated: GutoMemory | null = null
+
+      if (isGutoV3Enabled()) {
+        if (
+          !calibration.biologicalSex ||
+          !calibration.userAge ||
+          !calibration.weightKg ||
+          !calibration.heightCm ||
+          !calibration.trainingLevel ||
+          !calibration.trainingGoal ||
+          !calibration.trainingFrequencyDaysPerWeek
+        ) return
+
+        try {
+          await saveGutoV3Calibration({
+            biologicalSex: calibration.biologicalSex,
+            age: calibration.userAge,
+            weightKg: calibration.weightKg,
+            heightCm: calibration.heightCm,
+            trainingLevel: calibration.trainingLevel,
+            trainingGoal: calibration.trainingGoal,
+            trainingFrequencyDaysPerWeek: calibration.trainingFrequencyDaysPerWeek,
+          })
+        } catch {
+          // A resposta pode se perder depois do commit. O GET oficial decide se
+          // a calibragem foi realmente persistida; o POST nunca é repetido.
+        }
+
+        try {
+          updated = await reconcileV3OfficialState()
+        } catch {
+          updated = null
+        }
+        if (updated && !hasCompleteGutoCalibration(updated)) updated = null
+      } else {
+        updated = await persistMemory({
+          ...calibration,
+          language: selectedLanguage,
+          trainingStatus: calibration.trainingLevel,
+        }, { optimistic: false })
+      }
+
       if (!updated) {
         gutoAudio.playGutoFeedback("error")
         setProfileSaveError(stageCopy[selectedLanguage].profileSaveError)
         return
       }
       persistProfile({ calibrationComplete: true, onboardingComplete: false })
-      trackBehaviorEvent("calibration_completed", { ...calibration })
+      if (!isGutoV3Enabled()) trackBehaviorEvent("calibration_completed", { ...calibration })
       setStage("pact")
     },
-    [persistMemory, persistProfile, selectedLanguage, trackBehaviorEvent]
+    [persistMemory, persistProfile, reconcileV3OfficialState, selectedLanguage, trackBehaviorEvent]
   )
 
   const handleFoodDoubt = useCallback((food: DietFood, meal: DietMeal) => {
@@ -1947,15 +2040,42 @@ export function GutoApp({
   }, [persistSettingsMemory, settingsFoodRestrictionsDraft, showSavedToast])
 
   const saveSettingsData = useCallback(
-    async (calibration: GutoMemoryPayload) => {
-      const updated = await persistSettingsMemory(calibration)
+    async (calibration: CalibrationProfile) => {
+      let updated: GutoMemory | null = null
+      if (
+        isGutoV3Enabled() &&
+        calibration.biologicalSex &&
+        calibration.userAge &&
+        calibration.weightKg &&
+        calibration.heightCm &&
+        calibration.trainingLevel &&
+        calibration.trainingGoal &&
+        calibration.trainingFrequencyDaysPerWeek
+      ) {
+        try {
+          await saveGutoV3Calibration({
+            biologicalSex: calibration.biologicalSex,
+            age: calibration.userAge,
+            weightKg: calibration.weightKg,
+            heightCm: calibration.heightCm,
+            trainingLevel: calibration.trainingLevel,
+            trainingGoal: calibration.trainingGoal,
+            trainingFrequencyDaysPerWeek: calibration.trainingFrequencyDaysPerWeek,
+          })
+          updated = await reconcileV3OfficialState()
+        } catch {
+          updated = null
+        }
+      } else if (!isGutoV3Enabled()) {
+        updated = await persistSettingsMemory(calibration)
+      }
       if (!updated) return
       persistProfile({ calibrationComplete: true, onboardingComplete: true })
       showSavedToast()
       setSettingsMode("menu")
       setStage("system")
     },
-    [persistProfile, persistSettingsMemory, showSavedToast]
+    [persistProfile, persistSettingsMemory, reconcileV3OfficialState, selectedLanguage, showSavedToast]
   )
 
   const handleDownloadData = useCallback(() => {
@@ -2178,7 +2298,10 @@ export function GutoApp({
         const weekDays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const
         const todayKey = weekDays[new Date().getDay()]
         const todayWeeklyWorkout = memory?.weeklyWorkoutPlan?.days?.[todayKey]
-        if (todayWeeklyWorkout?.exercises?.length) {
+        const v3SharedContextReady = hasConfirmedV3Context(memory) && plansShareConfirmedV3Context(memory)
+        if (isGutoV3Enabled()) {
+          setWorkoutPlan(v3SharedContextReady ? memory?.lastWorkoutPlan || null : null)
+        } else if (todayWeeklyWorkout?.exercises?.length) {
           setWorkoutPlan(todayWeeklyWorkout)
         } else if (memory?.lastWorkoutPlan?.exercises?.length) {
           setWorkoutPlan(memory.lastWorkoutPlan)
@@ -2312,9 +2435,13 @@ export function GutoApp({
   })
   const userLabel = resolvedProfile.displayName || firstRealGutoName(committedName, userName) || ""
   const workoutMissingFields = getWorkoutMissingFields(memory)
+  const v3SharedPlanContextReady = hasConfirmedV3Context(memory) && plansShareConfirmedV3Context(memory)
   const localizedWorkoutPlan = useMemo(
-    () => localizeGutoWorkoutPlan(workoutPlan, selectedLanguage),
-    [selectedLanguage, workoutPlan]
+    () => localizeGutoWorkoutPlan(
+      isGutoV3Enabled() && !v3SharedPlanContextReady ? null : workoutPlan,
+      selectedLanguage,
+    ),
+    [selectedLanguage, v3SharedPlanContextReady, workoutPlan]
   )
   const locale = stageCopy[selectedLanguage]
   const vitalState = useMemo(() => getGutoVitalState(memory), [memory])
@@ -2350,7 +2477,7 @@ export function GutoApp({
         void persistMemory({ initialXpRewardSeen: true }, { optimistic: false })
       }}
       onProfileUpdate={updateUserProfileField}
-      onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
+      onMemoryPatch={applyMemoryPatch}
       onChangeLanguage={(nextLang) => {
         setSelectedLanguage(nextLang)
         writeConfirmedLanguageStorage(nextLang)
@@ -2364,7 +2491,7 @@ export function GutoApp({
       isAvatarActive={activeTab === "guto" && !isKeyboardOpen}
       isKeyboardOpen={isKeyboardOpen}
     />
-  ), [activeTab, evolution, gutoUserId, isKeyboardOpen, localizedWorkoutPlan, vitalState, memory, pendingExerciseQuestion, pendingFoodQuestion, persistMemory, persistProfile, selectedLanguage, updateUserProfileField, userLabel])
+  ), [activeTab, applyMemoryPatch, evolution, gutoUserId, isKeyboardOpen, localizedWorkoutPlan, vitalState, memory, pendingExerciseQuestion, pendingFoodQuestion, persistMemory, persistProfile, selectedLanguage, updateUserProfileField, userLabel])
 
   const validationLocationMode = useMemo(
     () =>
@@ -2389,7 +2516,7 @@ export function GutoApp({
             workoutPlan={localizedWorkoutPlan}
             currentEvolution={evolution}
             validationHistory={memory?.validationHistory}
-            onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
+            onMemoryPatch={applyMemoryPatch}
             onOpenChat={() => setActiveTab("guto")}
           />
         )
@@ -2438,13 +2565,13 @@ export function GutoApp({
             language={selectedLanguage}
             onFoodDoubt={handleFoodDoubt}
             memory={memory}
-            onMemoryPatch={(patch) => setMemory((prev) => prev ? { ...prev, ...patch } : prev)}
+            onMemoryPatch={applyMemoryPatch}
           />
         )
       default:
         return null
     }
-  }, [activeTab, arenaRefreshKey, evolution, gutoUserId, handleAdaptedMissionComplete, handleExerciseQuestion, handleFoodDoubt, handleMissionComplete, localizedWorkoutPlan, memory, selectedLanguage, userLabel, workoutMissingFields])
+  }, [activeTab, applyMemoryPatch, arenaRefreshKey, evolution, gutoUserId, handleAdaptedMissionComplete, handleExerciseQuestion, handleFoodDoubt, handleMissionComplete, localizedWorkoutPlan, memory, selectedLanguage, userLabel, workoutMissingFields])
 
   if (authLoading || !isHydrated || (user && user.role !== "student")) {
     return (
@@ -2927,6 +3054,11 @@ export function GutoApp({
                   : `${locale.pactConnecting} ${Math.round(pactProgress)}%`
                 : locale.hold}
             </p>
+            {profileSaveError && (
+              <p role="alert" className="mt-3 text-center font-mono text-[9px] font-black uppercase tracking-[0.12em] text-[rgba(200,30,30,0.82)]">
+                {profileSaveError}
+              </p>
+            )}
           </motion.section>
         )}
 
@@ -3182,14 +3314,9 @@ export function GutoApp({
                         : undefined,
                     trainingLevel: memory?.trainingLevel,
                     trainingGoal: memory?.trainingGoal,
-                    preferredTrainingLocation: memory?.preferredTrainingLocation,
-                    trainingPathology: memory?.trainingPathology,
-                    country: memory?.country,
-                    countryCode: memory?.countryCode,
-                    city: memory?.city,
+                    trainingFrequencyDaysPerWeek: memory?.trainingFrequencyDaysPerWeek,
                     heightCm: memory?.heightCm,
                     weightKg: memory?.weightKg,
-                    foodRestrictions: memory?.foodRestrictions,
                   }}
                   onComplete={saveSettingsData}
                 />

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { Apple, ChevronDown, ChevronUp, ClipboardList, Coffee, Droplets, Flame, Moon, RefreshCw, Salad, Utensils, Wheat, Zap, type LucideIcon } from "lucide-react"
 
-import { getDietPlan, generateDietPlan, getGutoMemory, type DietPlan, type DietMeal, type DietFood, type GutoMemory } from "@/lib/api/guto"
+import { generateDietPlan, getDietPlan, getGutoMemory, hasConfirmedV3Context, isGutoV3Enabled, plansShareConfirmedV3Context, type DietPlan, type DietMeal, type DietFood, type GutoMemory } from "@/lib/api/guto"
 import { ApiError } from "@/lib/api/client"
 import { DietPlanValidationError, sanitizeDietPlan } from "@/lib/diet-plan"
 import { getLanguage } from "../translations"
@@ -34,6 +34,8 @@ const dietCopy = {
     lockedPlan: "BLOQUEADA",
     emptyTitle: "Dieta ainda não gerada",
     emptyBody: "Complete seu perfil com altura, peso e país para o GUTO montar seu plano.",
+    contextPendingBody: "Conclua o alinhamento inicial no chat e confirme seu contexto para liberar treino e dieta juntos.",
+    contextPlanErrorBody: "Erro V3: o contexto foi confirmado, mas treino e dieta não chegaram na mesma versão.",
     coachDietTitle: "DIETA DO COACH",
     coachDietBadge: "DEFINIDA PELO COACH",
     coachBreakfast: "Café da manhã",
@@ -78,6 +80,8 @@ const dietCopy = {
     lockedPlan: "LOCKED",
     emptyTitle: "Diet not generated yet",
     emptyBody: "Complete your profile with height, weight and country so GUTO can build your plan.",
+    contextPendingBody: "Complete the initial alignment in chat and confirm your context to unlock workout and diet together.",
+    contextPlanErrorBody: "V3 error: context was confirmed, but workout and diet did not arrive on the same version.",
     coachDietTitle: "COACH DIET",
     coachDietBadge: "SET BY COACH",
     coachBreakfast: "Breakfast",
@@ -122,6 +126,8 @@ const dietCopy = {
     lockedPlan: "BLOCCATA",
     emptyTitle: "Dieta non ancora creata",
     emptyBody: "Completa il profilo con altezza, peso e paese per far creare la dieta a GUTO.",
+    contextPendingBody: "Completa l'allineamento iniziale nella chat e conferma il contesto per sbloccare insieme allenamento e dieta.",
+    contextPlanErrorBody: "Errore V3: il contesto è confermato, ma allenamento e dieta non sono arrivati nella stessa versione.",
     coachDietTitle: "DIETA DEL COACH",
     coachDietBadge: "DEFINITA DAL COACH",
     coachBreakfast: "Colazione",
@@ -494,6 +500,10 @@ function CoachDietView({ coachDiet, copy }: { coachDiet: CoachDietDay; copy: Coa
 export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }: DietTabProps) {
   const validLang = getLanguage(language)
   const copy = dietCopy[validLang]
+  const v3Enabled = isGutoV3Enabled()
+  const confirmedContextReady = hasConfirmedV3Context(memory)
+  const sharedPlanContextReady = confirmedContextReady && plansShareConfirmedV3Context(memory)
+  const officialDietPlan = v3Enabled && !sharedPlanContextReady ? null : memory?.lastDietPlan ?? null
 
   const [plan, setPlan] = useState<DietPlan | null>(null)
   const [status, setStatus] = useState<"loading" | "generating" | "error" | "ready">("loading")
@@ -502,7 +512,9 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }
   const latestMemoryRef = useRef(memory)
 
   const weekDaysOrder = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const
-  const todayCoachDiet = memory?.weeklyDietPlan?.days?.[weekDaysOrder[new Date().getDay()]] ?? null
+  const todayCoachDiet = v3Enabled
+    ? null
+    : memory?.weeklyDietPlan?.days?.[weekDaysOrder[new Date().getDay()]] ?? null
   const dietProfileKey = useMemo(() => JSON.stringify({
     heightCm: memory?.heightCm ?? null,
     weightKg: memory?.weightKg ?? null,
@@ -531,6 +543,26 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }
     latestMemoryRef.current = memory
   }, [memory])
 
+  useEffect(() => {
+    if (!officialDietPlan) {
+      if (v3Enabled) {
+        setPlan(null)
+        setStatus("ready")
+        setErrorMsg(null)
+      }
+      return
+    }
+    try {
+      setPlan(sanitizeDietPlan(officialDietPlan, memory))
+      setStatus("ready")
+      setErrorMsg(null)
+    } catch (err: unknown) {
+      setPlan(null)
+      setStatus("error")
+      setErrorMsg(getDietErrorMessage(err, copy))
+    }
+  }, [copy, memory, officialDietPlan, v3Enabled])
+
   function isPlanStale(generatedAt: string): boolean {
     const planDate = new Date(generatedAt)
     const now = new Date()
@@ -554,10 +586,6 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }
     )
   }, [])
 
-  function isProfileComplete(): boolean {
-    return isProfileCompleteFor(latestMemoryRef.current)
-  }
-
   const loadFreshMemoryIfIncomplete = useCallback(async () => {
     if (isProfileCompleteFor(latestMemoryRef.current)) return latestMemoryRef.current
     try {
@@ -572,11 +600,15 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }
 
   useEffect(() => {
     if (!userId) return
+    // No Preview V3, esta aba nunca gera ou busca uma dieta paralela. Ela só
+    // apresenta o plano atômico confirmado pelo First Contact no estado V3.
+    if (v3Enabled) return
     // If coach defined today's diet, skip API call
     if (todayCoachDiet) {
       setStatus("ready")
       return
     }
+    if (officialDietPlan) return
     let cancelled = false
 
     const hardTimeout = setTimeout(() => {
@@ -632,9 +664,10 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }
       cancelled = true
       clearTimeout(hardTimeout)
     }
-  }, [userId, validLang, dietProfileKey, copy, isProfileCompleteFor, loadFreshMemoryIfIncomplete, todayCoachDiet])
+  }, [userId, validLang, dietProfileKey, copy, isProfileCompleteFor, loadFreshMemoryIfIncomplete, officialDietPlan, todayCoachDiet, v3Enabled])
 
   const handleRetry = async () => {
+    if (v3Enabled) return
     if (retrying) return
     if (plan?.lockedByCoach) {
       const confirmed = window.confirm(copy.lockedConfirm)
@@ -699,8 +732,14 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }
 
   // ── Empty / Error ─────────────────────────────────────────────────────────
   if (!plan) {
-    const profileComplete = isProfileComplete()
-    const bodyText = !profileComplete ? copy.emptyBody : errorMsg || retryLabel[validLang]
+    const profileComplete = isProfileCompleteFor(memory)
+    const bodyText = v3Enabled
+      ? confirmedContextReady
+        ? copy.contextPlanErrorBody
+        : copy.contextPendingBody
+      : !profileComplete
+        ? copy.emptyBody
+        : errorMsg || retryLabel[validLang]
 
     return (
       <div className="guto-tab-shell">
@@ -726,7 +765,7 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }
             </h2>
             <p className="guto-readable-body">{bodyText}</p>
           </div>
-          {profileComplete && status === "error" && (
+          {!v3Enabled && profileComplete && status === "error" && (
             <motion.button
               type="button"
               whileTap={{ scale: 0.97 }}

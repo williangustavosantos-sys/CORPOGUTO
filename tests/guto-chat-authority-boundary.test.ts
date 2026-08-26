@@ -67,4 +67,16 @@ describe("fronteira de autoridade do chat", () => {
     assert.doesNotMatch(v3Body, /payload\.history/)
     assert.doesNotMatch(v3Body, /profile|language|workoutPlan|dietPlan/)
   })
+
+  it("preserva no adaptador V3 a correlação do contexto que originou o turno", () => {
+    const v3Branch = sourceBetween(
+      apiSource,
+      "if (isGutoV3Enabled()) {",
+      "return apiRequest<SendGutoMessageResponse>",
+    )
+
+    assert.match(v3Branch, /contextVersion:\s*payload\.contextVersion/)
+    assert.match(v3Branch, /activeContextType:\s*payload\.activeContextType/)
+    assert.match(v3Branch, /activeItemId:\s*payload\.activeItemId/)
+  })
 })

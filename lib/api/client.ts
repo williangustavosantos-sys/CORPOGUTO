@@ -27,6 +27,12 @@ export const API_URL = RAW_API_URL.replace(/\/+$/, "")
 
 let activeAuthToken: string | undefined
 
+export function getApiAuthTokenStorageKey() {
+  return process.env.NEXT_PUBLIC_GUTO_V3_ENABLED === "true"
+    ? "guto-v3-auth-token"
+    : "guto-auth-token"
+}
+
 export function setApiAuthToken(token: string | null | undefined) {
   activeAuthToken = token || undefined
 }
@@ -35,7 +41,7 @@ function readAuthToken() {
   if (activeAuthToken) return activeAuthToken
   if (typeof window === "undefined") return undefined
   try {
-    return window.localStorage.getItem("guto-auth-token") ?? undefined
+    return window.localStorage.getItem(getApiAuthTokenStorageKey()) ?? undefined
   } catch {
     return undefined
   }
@@ -45,7 +51,7 @@ function removeAuthToken() {
   activeAuthToken = undefined
   if (typeof window === "undefined") return
   try {
-    window.localStorage.removeItem("guto-auth-token")
+    window.localStorage.removeItem(getApiAuthTokenStorageKey())
   } catch {
     // Storage is optional; redirect below still recovers the user session.
   }
