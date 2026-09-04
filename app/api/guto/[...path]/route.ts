@@ -1,16 +1,19 @@
 import { NextRequest } from "next/server"
+import { getVercelOidcToken } from "@vercel/oidc"
 import {
   isGutoProxyHostAllowed,
   isGutoV3PanelProxyPathAllowed,
   isGutoV3ProxyPathAllowed,
 } from "@/lib/api/guto-proxy-host"
 
-const BACKEND_URL = (
-  process.env.GUTO_BACKEND_PROXY_URL ||
-  process.env.NEXT_PUBLIC_GUTO_API_URL ||
-  process.env.NEXT_PUBLIC_API_URL ||
-  ""
-).replace(/\/+$/, "")
+function getBackendUrl() {
+  return (
+    process.env.GUTO_BACKEND_PROXY_URL ||
+    process.env.NEXT_PUBLIC_GUTO_API_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    ""
+  ).replace(/\/+$/, "")
+}
 type RouteContext = {
   params: Promise<{ path?: string[] }>
 }
@@ -33,12 +36,13 @@ async function proxyToBackend(request: NextRequest, context: RouteContext) {
     }, { status: 409 })
   }
 
-  if (!BACKEND_URL) {
+  const backendUrl = getBackendUrl()
+  if (!backendUrl) {
     return Response.json({ message: "Backend proxy sem URL configurada." }, { status: 500 })
   }
 
   const path = params.path?.map(encodeURIComponent).join("/") || ""
-  const target = new URL(`${BACKEND_URL}/${path}`)
+  const target = new URL(`${backendUrl}/${path}`)
   target.search = request.nextUrl.search
 
   const headers = new Headers()
@@ -48,6 +52,8 @@ async function proxyToBackend(request: NextRequest, context: RouteContext) {
   if (contentType) headers.set("content-type", contentType)
   if (authorization) headers.set("authorization", authorization)
   if (requestId) headers.set("x-request-id", requestId)
+  const oidcToken = await getVercelOidcToken()
+  if (oidcToken) headers.set("x-vercel-trusted-oidc-idp-token", oidcToken)
 
   const hasBody = !["GET", "HEAD"].includes(request.method)
   const upstream = await fetch(target, {

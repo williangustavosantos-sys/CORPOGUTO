@@ -7,11 +7,17 @@ import { isGutoV3PanelProxyPathAllowed, isGutoV3ProxyPathAllowed } from "../lib/
 
 const originalFetch = globalThis.fetch
 const originalV3Flag = process.env.NEXT_PUBLIC_GUTO_V3_ENABLED
+const originalBackendUrl = process.env.GUTO_BACKEND_PROXY_URL
+const originalOidcToken = process.env.VERCEL_OIDC_TOKEN
 
 afterEach(() => {
   globalThis.fetch = originalFetch
   if (originalV3Flag === undefined) delete process.env.NEXT_PUBLIC_GUTO_V3_ENABLED
   else process.env.NEXT_PUBLIC_GUTO_V3_ENABLED = originalV3Flag
+  if (originalBackendUrl === undefined) delete process.env.GUTO_BACKEND_PROXY_URL
+  else process.env.GUTO_BACKEND_PROXY_URL = originalBackendUrl
+  if (originalOidcToken === undefined) delete process.env.VERCEL_OIDC_TOKEN
+  else process.env.VERCEL_OIDC_TOKEN = originalOidcToken
 })
 
 test("allowlist do proxy V3 contém somente Cérebro V3 e health V3", () => {
@@ -59,4 +65,42 @@ test("proxy Preview bloqueia rota legada antes de qualquer fetch upstream", asyn
   assert.equal(body.error, "V3_LEGACY_AUTHORITY_DISABLED")
   assert.equal(body.brainVersion, "guto-cerebro-v3")
   assert.equal(fetchCount, 0)
+})
+
+test("proxy V3 anexa OIDC server-side, preserva headers GUTO e ignora token do browser", async () => {
+  process.env.NEXT_PUBLIC_GUTO_V3_ENABLED = "true"
+  process.env.GUTO_BACKEND_PROXY_URL = "https://backend-preview.vercel.app"
+  const serverOidcToken = `test.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 60 })).toString("base64url")}.signature`
+  process.env.VERCEL_OIDC_TOKEN = serverOidcToken
+
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(String(input), "https://backend-preview.vercel.app/guto/v3/auth/me?from=proxy")
+    const headers = new Headers(init?.headers)
+    assert.equal(headers.get("authorization"), "Bearer guto-user-token")
+    assert.equal(headers.get("content-type"), "application/json")
+    assert.equal(headers.get("x-request-id"), "request-123")
+    assert.equal(headers.get("x-vercel-trusted-oidc-idp-token"), serverOidcToken)
+    assert.notEqual(headers.get("x-vercel-trusted-oidc-idp-token"), "browser-supplied-token")
+    return Response.json({ error: "V3_AUTH_REQUIRED" }, {
+      status: 401,
+      headers: { "x-guto-trace-id": "trace-123" },
+    })
+  }) as typeof fetch
+
+  const request = new NextRequest("https://corpoguto-preview.vercel.app/api/guto/guto/v3/auth/me?from=proxy", {
+    headers: {
+      authorization: "Bearer guto-user-token",
+      "content-type": "application/json",
+      "x-request-id": "request-123",
+      "x-vercel-trusted-oidc-idp-token": "browser-supplied-token",
+      host: "corpoguto-preview.vercel.app",
+    },
+  })
+  const response = await POST(request, {
+    params: Promise.resolve({ path: ["guto", "v3", "auth", "me"] }),
+  })
+
+  assert.equal(response.status, 401)
+  assert.equal(response.headers.get("x-guto-trace-id"), "trace-123")
+  assert.deepEqual(await response.json(), { error: "V3_AUTH_REQUIRED" })
 })
