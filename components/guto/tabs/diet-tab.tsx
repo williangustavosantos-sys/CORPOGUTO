@@ -733,9 +733,15 @@ export function DietTab({ userId, language, onFoodDoubt, memory, onMemoryPatch }
   // ── Empty / Error ─────────────────────────────────────────────────────────
   if (!plan) {
     const profileComplete = isProfileCompleteFor(memory)
+    // V3: se o plano oficial foi rejeitado na checagem final (ex.: restrição
+    // alimentar), mostrar a mensagem real do erro — nunca mascarar com a copy
+    // genérica de "versões divergentes".
+    const v3BlockedBySafetyNet = status === "error" && Boolean(errorMsg)
     const bodyText = v3Enabled
       ? confirmedContextReady
-        ? copy.contextPlanErrorBody
+        ? v3BlockedBySafetyNet
+          ? errorMsg || copy.contextPlanErrorBody
+          : copy.contextPlanErrorBody
         : copy.contextPendingBody
       : !profileComplete
         ? copy.emptyBody

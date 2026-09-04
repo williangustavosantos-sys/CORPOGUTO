@@ -1,0 +1,7 @@
+fix(diet): show real safety-net error on V3 diet, not the generic version copy
+
+When the official V3 diet is rejected by sanitizeDietPlan (e.g.
+restriction_violation for a declared vegetarian), the tab masked the real
+message behind the generic "workout and diet did not arrive on the same
+version" copy. It now surfaces the actual error message whenever the
+plan failed the final check.
