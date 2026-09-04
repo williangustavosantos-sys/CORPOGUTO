@@ -227,12 +227,14 @@ export async function apiRequest<T>(
     if (!res.ok) {
       let message = `Erro de API (${res.status})`
       let details: unknown = undefined
+      let code: string | undefined
       try {
         const body = await res.json()
         message = isApiErrorBody(body) ? body.message || body.error || message : message
+        code = isApiErrorBody(body) ? body.code || body.error : undefined
         details = body
       } catch {}
-      throw new ApiError(message, res.status, details)
+      throw new ApiError(message, res.status, details, code)
     }
 
     if (res.status === 204) return undefined as T

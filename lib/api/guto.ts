@@ -405,6 +405,9 @@ export interface GutoV3ConfirmedContext {
   id: string
   version: number
   confirmedAt: string
+  /** Versões oficiais do perfil/goal no momento da confirmação (autoridade V3). */
+  profileVersion?: number
+  goalVersion?: number
 }
 
 export function shouldStartGutoV3FirstContact(firstContact?: GutoV3FirstContactState | null) {
@@ -646,6 +649,11 @@ export interface GutoMemory {
   workoutFeedbackHistory?: WorkoutFeedbackRecord[]
   firstContact?: GutoV3FirstContactState
   confirmedContext?: GutoV3ConfirmedContext | null
+  // Versões oficiais correntes do perfil/goal (Cérebro V3). Comparadas com
+  // confirmedContext.profileVersion/goalVersion para derivar se o contexto
+  // confirmado ficou stale depois de uma edição de calibração.
+  v3ProfileVersion?: number
+  v3GoalVersion?: number
   // Classificação semântica dos 3 campos livres (país/patologia/restrição) feita
   // pelo backend. Usada pelos badges de contexto (Fase 3K) para distinguir
   // cuidado físico ativo (status "clear" + bodyRegion) de cuidado pendente.
@@ -953,7 +961,46 @@ export function gutoV3StateToMemory(response: GutoV3StateResponse): GutoMemory {
     initialXpRewardSeen: state.journey.initialXpRewardSeen,
     firstContact: state.firstContact,
     confirmedContext: state.confirmedContext,
+    v3ProfileVersion: profile?.version,
+    v3GoalVersion: state.goal?.version,
   }
+}
+
+/**
+ * Contexto confirmado ficou stale: o perfil/goal oficial avançou de versão
+ * depois da última confirmação. O backend responde a qualquer superfície V3
+ * com 409 V3_CONTEXT_RECONFIRMATION_REQUIRED até o usuário reconfirmar.
+ *
+ * Retorna false enquanto faltar versão suficiente no memory (ex.: primeiro
+ * acesso sem contexto confirmado), para nunca bloquear fluxos legítimos.
+ */
+export function needsV3ContextReconfirmation(memory?: GutoMemory | null) {
+  if (!memory) return false
+  if (memory.firstContact?.status !== "COMPLETED") return false
+  const confirmed = memory.confirmedContext
+  if (!confirmed?.version) return false
+  const profileVersion = memory.v3ProfileVersion
+  if (
+    typeof profileVersion === "number" &&
+    typeof confirmed.profileVersion === "number" &&
+    profileVersion !== confirmed.profileVersion
+  ) {
+    return true
+  }
+  const goalVersion = memory.v3GoalVersion
+  return Boolean(
+    typeof goalVersion === "number" &&
+    typeof confirmed.goalVersion === "number" &&
+    goalVersion !== confirmed.goalVersion,
+  )
+}
+
+export function isV3ContextReconfirmationError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 409 &&
+    error.code === "V3_CONTEXT_RECONFIRMATION_REQUIRED"
+  )
 }
 
 export function hasConfirmedV3Context(memory?: Pick<GutoMemory, "firstContact" | "confirmedContext"> | null) {
@@ -1104,6 +1151,20 @@ export async function confirmGutoV3FirstContact() {
     method: "POST",
     timeoutMs: 60000,
     body: JSON.stringify({ requestId: createV3RequestId(), confirmed: true }),
+  })
+}
+
+/**
+ * Re-confirmação pós-conclusão: autoridade V3 valida o perfil/goal corrente,
+ * emite novo UserContextSnapshot e regenera treino/dieta na nova versão.
+ * Body assinado server-side via proxy (nunca exposto ao navegador além deste
+ * request) — mesmo envelope dos demais endpoints de estado V3.
+ */
+export async function reconfirmGutoV3Context() {
+  return apiRequest<GutoV3StateResponse>("/guto/v3/context/reconfirm", {
+    method: "POST",
+    timeoutMs: 60000,
+    body: JSON.stringify({ requestId: createV3RequestId() }),
   })
 }
 

@@ -8,6 +8,7 @@ import { Activity, ArrowLeft, Check, CheckCircle2, Download, Fingerprint, Langua
 import { Country } from "country-state-city"
 
 import { BottomNavigation, type TabType } from "./bottom-navigation"
+import { ContextReconfirmGate } from "./context-reconfirm-gate"
 import { createGutoEffectRegistry } from "./effects"
 import { ArenaTab } from "./tabs/arena-tab"
 import { ChatTab } from "./tabs/chat-tab"
@@ -21,7 +22,7 @@ import { LanguageScreen } from "./screens/language-screen"
 import type { MissionExercise } from "./view-models"
 import { WorkoutValidationFlow } from "./validation/workout-validation-flow"
 import { getApiErrorMessage } from "@/lib/api/client"
-import { acceptGutoConsent, getGutoMemory, hasConfirmedV3Context, isGutoV3Enabled, plansShareConfirmedV3Context, saveGutoMemory, saveGutoV3Calibration, trackGutoEvent, validateGutoName, type DietFood, type DietMeal, type GutoMemory, type GutoNameValidation, type GutoTelemetryEvent, type GutoWorkoutPlan } from "@/lib/api/guto"
+import { acceptGutoConsent, getGutoMemory, gutoV3StateToMemory, hasConfirmedV3Context, isGutoV3Enabled, needsV3ContextReconfirmation, plansShareConfirmedV3Context, reconfirmGutoV3Context, saveGutoMemory, saveGutoV3Calibration, trackGutoEvent, validateGutoName, type DietFood, type DietMeal, type GutoMemory, type GutoNameValidation, type GutoTelemetryEvent, type GutoWorkoutPlan } from "@/lib/api/guto"
 import { useAuth } from "@/components/auth-provider"
 import { getInvite, claimInvite, logout, deleteOwnAccount, revokeConsent, type InvitePreview } from "@/lib/api/auth"
 import type { EvolutionStage, SupportedLanguage } from "@/types/contract"
@@ -2078,6 +2079,36 @@ export function GutoApp({
     [persistProfile, persistSettingsMemory, reconcileV3OfficialState, selectedLanguage, showSavedToast]
   )
 
+  // ── V3 pós-conclusão: contexto stale (V3_CONTEXT_RECONFIRMATION_REQUIRED) ──
+  // O backend é a autoridade: perfil/goal avançaram de versão e o contexto
+  // confirmado ficou stale. O gate é estado de produto (não erro técnico):
+  // mostra a calibração corrente e oferece CONFIRMAR (emite novo
+  // UserContextSnapshot e regenera planos) ou CORRIGIR (abre o editor Dados).
+  const [isReconfirmingV3Context, setIsReconfirmingV3Context] = useState(false)
+  const [v3ReconfirmError, setV3ReconfirmError] = useState<string | null>(null)
+
+  const handleReconfirmV3Context = useCallback(async () => {
+    if (isReconfirmingV3Context) return
+    setIsReconfirmingV3Context(true)
+    setV3ReconfirmError(null)
+    try {
+      const official = await reconfirmGutoV3Context()
+      applyOfficialV3Memory(gutoV3StateToMemory(official))
+      showSavedToast()
+    } catch (error) {
+      setV3ReconfirmError(getApiErrorMessage(error, selectedLanguage))
+    } finally {
+      setIsReconfirmingV3Context(false)
+    }
+  }, [applyOfficialV3Memory, isReconfirmingV3Context, selectedLanguage, showSavedToast])
+
+  const handleCorrectV3Context = useCallback(() => {
+    setV3ReconfirmError(null)
+    setIsReconfirmingV3Context(false)
+    setStage("system")
+    setSettingsMode("data")
+  }, [])
+
   const handleDownloadData = useCallback(() => {
     if (typeof window === "undefined" || !user?.userId) return
     const stored = (() => {
@@ -3931,6 +3962,21 @@ export function GutoApp({
           </TabErrorBoundary>
         </div>
       )}
+
+      <ContextReconfirmGate
+        open={Boolean(
+          isGutoV3Enabled() &&
+          stage === "system" &&
+          settingsMode === "menu" &&
+          needsV3ContextReconfirmation(memory),
+        )}
+        language={selectedLanguage}
+        memory={memory}
+        isConfirming={isReconfirmingV3Context}
+        errorMessage={v3ReconfirmError}
+        onConfirm={() => void handleReconfirmV3Context()}
+        onCorrect={handleCorrectV3Context}
+      />
     </div>
   )
 }
