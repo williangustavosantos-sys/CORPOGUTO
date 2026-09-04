@@ -2105,9 +2105,11 @@ export function GutoApp({
   const handleCorrectV3Context = useCallback(() => {
     setV3ReconfirmError(null)
     setIsReconfirmingV3Context(false)
-    setStage("system")
+    // CORRIGIR abre o editor Dados (Ajustes) já com a calibração corrente
+    // semeada — o usuário ajusta e salva; o gate volta até reconfirmar.
+    openSettings()
     setSettingsMode("data")
-  }, [])
+  }, [openSettings])
 
   const handleDownloadData = useCallback(() => {
     if (typeof window === "undefined" || !user?.userId) return
