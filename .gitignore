@@ -63,3 +63,6 @@ task_progress.md
 .mcp.json
 .claude/launch.json
 .codex/
+
+# founder-gate evidence (local only)
+tmp/
