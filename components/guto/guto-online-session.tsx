@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Clock, RotateCcw, Undo2, X } from "lucide-react"
 
 import type { GutoWorkoutPlan } from "@/lib/api/guto"
-import { clearActiveExercise, setActiveExercise } from "@/lib/api/guto"
+import { clearActiveExercise, isGutoV3Enabled, setActiveExercise } from "@/lib/api/guto"
 import type { EvolutionStage } from "@/types/contract"
 import { GutoVividAvatar } from "@/components/guto/guto-vivid-avatar"
 
@@ -52,6 +52,9 @@ interface GutoOnlineSessionProps {
   language: string
   userName?: string
   evolution?: EvolutionStage
+  /** P0 (workout validation authority): stable logical session id shared by
+   * Mission/GUTO Online/ValidationFlow — the V3 official events use it. */
+  workoutSessionId?: string | null
   onFinish?: () => void
 }
 
@@ -202,6 +205,7 @@ export function GutoOnlineSession({
   workoutPlan,
   language,
   userName,
+  workoutSessionId,
   onFinish,
   evolution = "baby",
 }: GutoOnlineSessionProps) {
@@ -407,28 +411,33 @@ export function GutoOnlineSession({
       onFinish?.()
     }
 
-    // Ponte GUTO Online → cérebro: persiste o exercício/série em execução na fonte
-    // única (GutoMemory) para que o chat saiba onde o usuário está. Só na troca de
-    // exercício/série, para não bater no backend a cada tick do timer.
+    // Ponte GUTO Online → cérebro. P0 (V3): /guto/active-exercise é superfície
+    // legada (V3_FEATURE_NOT_IMPLEMENTED) — no V3 o Online NÃO chama autoridade
+    // legada e NÃO tem unhandled rejection. Os eventos oficiais da sessão são
+    // consolidados UMA vez antes da validação (/guto/v3/workout/validate), com o
+    // MESMO workoutSessionId estável; o fim do Online não concede XP — leva à
+    // mesma validação por selfie.
     const setChanged = previous.currentSet !== state.currentSet
-    if (
-      currentExercise &&
-      state.phase !== "finished" &&
-      (exerciseChanged || setChanged || phaseChanged)
-    ) {
-      void setActiveExercise({
-        source: "online",
-        name: currentExercise.name,
-        muscleGroup: currentExercise.muscleGroup,
-        reps: String(currentExercise.reps),
-        load: currentExercise.load ?? undefined,
-        rest: currentExercise.rest,
-        currentSet: state.currentSet,
-        totalSets,
-      })
-    }
-    if (state.phase === "finished" && phaseChanged) {
-      void clearActiveExercise()
+    if (!isGutoV3Enabled()) {
+      if (
+        currentExercise &&
+        state.phase !== "finished" &&
+        (exerciseChanged || setChanged || phaseChanged)
+      ) {
+        void setActiveExercise({
+          source: "online",
+          name: currentExercise.name,
+          muscleGroup: currentExercise.muscleGroup,
+          reps: String(currentExercise.reps),
+          load: currentExercise.load ?? undefined,
+          rest: currentExercise.rest,
+          currentSet: state.currentSet,
+          totalSets,
+        }).catch(() => {})
+      }
+      if (state.phase === "finished" && phaseChanged) {
+        void clearActiveExercise().catch(() => {})
+      }
     }
 
     lastPhaseRef.current = {
@@ -651,8 +660,14 @@ export function GutoOnlineSession({
   }, [dispatch])
 
   // ─── Validar (libera a tela de validação do treino) ─────────────────────
+  // P0 (V3): nunca chamar autoridade legada /guto/active-exercise aqui; o fim
+  // do Online NÃO concede XP — onFinish leva à MESMA validação por selfie, que
+  // consolida os eventos oficiais (workoutSessionId estável) via
+  // /guto/v3/workout/validate.
   const handleValidate = useCallback(() => {
-    void clearActiveExercise()
+    if (!isGutoV3Enabled()) {
+      void clearActiveExercise().catch(() => {})
+    }
     onFinish?.()
     onClose()
   }, [onClose, onFinish])
@@ -674,7 +689,12 @@ export function GutoOnlineSession({
   const isVoiceEnabled = state.voiceMode === "enabled"
 
   return (
-    <div className="fixed inset-0 z-9999 flex bg-[radial-gradient(circle_at_top,rgba(82,231,255,0.22),transparent_34%),linear-gradient(180deg,#f8fcff_0%,#eaf4fb_54%,#dbe8f2_100%)] text-(--guto-navy)">
+    <div
+      className="fixed inset-0 z-9999 flex bg-[radial-gradient(circle_at_top,rgba(82,231,255,0.22),transparent_34%),linear-gradient(180deg,#f8fcff_0%,#eaf4fb_54%,#dbe8f2_100%)] text-(--guto-navy)"
+      // P0 (workout validation authority): a sessão lógica acompanha o cockpit;
+      // os eventos oficiais são consolidados antes da validação final.
+      data-workout-session-id={workoutSessionId ?? undefined}
+    >
       <div className="mx-auto flex h-full w-full max-w-md flex-col px-4 pb-5 pt-[max(1rem,env(safe-area-inset-top))]">
         {/* ─── Header ──────────────────────────────────────────────── */}
         <header className="guto-premium-card flex items-start justify-between gap-3 px-4 py-3">

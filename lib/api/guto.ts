@@ -1,6 +1,7 @@
 import { apiRequest, ApiError } from "./client"
 import { assertValidGutoUserId } from "../guto-user-id"
 import { Country } from "country-state-city"
+import { localizeFoodName } from "../food-l10n"
 
 export type SupportedLanguage = "pt-BR" | "it-IT" | "en-US"
 export type WorkoutLocationMode = "gym" | "home" | "park"
@@ -112,6 +113,10 @@ export type GutoTelemetryEvent =
 
 export interface GutoWorkoutExercise {
   id: string
+  /** P0 (workout validation authority): the CANONICAL exercise id in the V3
+   * catalog / workout_plan_items (exercise_id) — the backend session-exercises
+   * route rejects ids that don't belong to the active official plan. */
+  exerciseId?: string
   name: string
   canonicalNamePt: string
   muscleGroup: string
@@ -705,6 +710,9 @@ export interface DietMacros {
 export interface DietFood {
   id?: string
   planId?: string
+  /** P0 (idioma é lei): the canonical V3 food id used to localize the display
+   * name deterministically (pt-BR/it-IT/en-US) after swap/reload. */
+  foodId?: string
   name: string
   quantity: string
   kcal: number
@@ -784,6 +792,7 @@ function v3WorkoutToLegacy(state: GutoV3StateResponse["state"]): GutoWorkoutPlan
     summary: plan.title,
     exercises: plan.items.map((item) => ({
       id: item.id,
+      exerciseId: item.exerciseId,
       name: item.name,
       canonicalNamePt: item.canonicalNamePt || item.name,
       muscleGroup: item.muscleGroup,
@@ -851,7 +860,11 @@ function v3DietToLegacy(state: GutoV3StateResponse["state"]): DietPlan | null {
       foods: meal.items.map((item) => ({
         id: item.id,
         planId: plan.id,
-        name: item.name,
+        // P0 (idioma é lei): nome localizado deterministicamente por foodId +
+        // idioma do perfil — após swap/reload o nome nunca volta em inglês
+        // para um usuário pt-BR/it-IT.
+        foodId: item.foodId,
+        name: localizeFoodName(item.foodId, item.name, state.profile?.language || state.journey.preferredLanguage),
         quantity: `${item.quantityGrams} g`,
         kcal: item.calories,
         proteinG: item.proteinGrams,
@@ -1276,10 +1289,21 @@ export async function saveGutoMemory(payload: {
 }) {
   assertValidGutoUserId(payload.userId)
   if (isGutoV3Enabled()) {
+    // P0 (workout validation authority): no V3 o /memory NUNCA carrega xpEvent —
+    // XP de missão só existe pela validação oficial /guto/v3/workout/validate
+    // (selfie + sessão + XP + rotação atômicas). O bypass completo_daily_mission
+    // é impossível do lado do cliente (xpEvent: undefined é descartado pelo
+    // JSON.stringify).
     const result = await apiRequest<GutoV3StateResponse>("/guto/v3/memory", {
       method: "POST",
       timeoutMs: GUTO_MEMORY_IO_TIMEOUT_MS,
-      body: JSON.stringify({ ...payload, userId: undefined, lastWorkoutPlan: undefined, requestId: createV3RequestId() }),
+      body: JSON.stringify({
+        ...payload,
+        xpEvent: undefined,
+        userId: undefined,
+        lastWorkoutPlan: undefined,
+        requestId: createV3RequestId(),
+      }),
     })
     return gutoV3StateToMemory(result)
   }
@@ -1315,9 +1339,87 @@ export async function acceptGutoConsent() {
   })
 }
 
+// ─── P0 WORKOUT VALIDATION AUTHORITY (founder gate) ─────────────────────────
+// Uma execução lógica de treino tem UM workoutSessionId estável, compartilhado
+// por Mission/GUTO Online/ValidationFlow. Os exercícios são registrados via a
+// rota oficial /guto/v3/workout/session-exercises e a conclusão acontece uma
+// única vez pela autoridade /guto/v3/workout/validate (selfie obrigatória,
+// sessão + XP + rotação atômicas no backend). O frontend NUNCA é autoridade.
+
+export function createV3WorkoutSessionId(): string {
+  return createV3RequestId()
+}
+
+export interface V3WorkoutExerciseEventInput {
+  requestId: string
+  exerciseId: string
+  workoutSessionId: string
+  loadValue?: number
+  repetitions?: number
+  setsCompleted?: number
+  completed: boolean
+  perceivedDifficulty?: number
+  substitutedFromExerciseId?: string
+  substitutionReason?: string
+  context?: Record<string, unknown>
+}
+
+export async function recordGutoV3WorkoutExerciseEvent(input: V3WorkoutExerciseEventInput) {
+  return apiRequest<{ brainVersion: "guto-cerebro-v3"; decision: { exerciseId: string; decision: string; reasonCode: string } }>(
+    "/guto/v3/workout/session-exercises",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+/** Consolidates the official plan exercises into the V3 session right before
+ * the final validation. Idempotent per session via the backend dedupe on
+ * requestId + per-call unique request ids; callers guard with a session-level
+ * flag so a reload/retry never duplicates the official history. */
+export async function recordGutoV3WorkoutSessionExercises(payload: {
+  workoutSessionId: string
+  workoutPlan: GutoWorkoutPlan
+  feedbackDifficulty?: WorkoutFeedbackDifficulty
+}): Promise<void> {
+  const exercises = (payload.workoutPlan.exercises || []).filter((exercise) => exercise.exerciseId)
+  if (exercises.length === 0) {
+    throw new ApiError("Este treino não tem exercícios oficiais V3 para registrar.", 409, {}, "V3_WORKOUT_EXERCISES_EMPTY")
+  }
+  for (const [index, exercise] of exercises.entries()) {
+    const repetitions = Number(String(exercise.reps || "").replace(/[^0-9]/g, ""))
+    await recordGutoV3WorkoutExerciseEvent({
+      requestId: createV3RequestId(),
+      exerciseId: exercise.exerciseId!,
+      workoutSessionId: payload.workoutSessionId,
+      setsCompleted: exercise.sets || 1,
+      ...(Number.isFinite(repetitions) && repetitions > 0 ? { repetitions } : {}),
+      completed: true,
+      context: {
+        source: "validation_flow",
+        order: exercise.order ?? index,
+        workoutPlanId: payload.workoutPlan.studentId || null,
+        ...(payload.feedbackDifficulty ? { feedbackDifficulty: payload.feedbackDifficulty } : {}),
+      },
+    })
+  }
+}
+
+export interface GutoV3WorkoutValidationResponse {
+  brainVersion: "guto-cerebro-v3"
+  requestId: string
+  traceId: string
+  status: "completed"
+  xpGranted: boolean
+  nextSessionIndex: number
+  evidence: { sha256: string; mime: string; byteLength: number }
+}
+
 export async function validateWorkout(payload: {
   userId: string
   imageBase64?: string  // optional: undefined when user skips camera
+  workoutSessionId?: string  // P0 (authority): required in V3 — stable logical session id
   workoutFocus: string
   workoutLabel: string
   locationMode: WorkoutLocationMode
@@ -1331,14 +1433,26 @@ export async function validateWorkout(payload: {
   }
 }) {
   if (isGutoV3Enabled()) {
+    // P0 (selfie é core): sem prova NÃO há mérito — a autoridade V3 rejeita
+    // qualquer validação sem evidência de câmera, e o frontend nunca envia
+    // complete_daily_mission por /memory.
+    const evidence = payload.imageBase64?.trim()
+    if (!evidence) {
+      throw new ApiError("Selfie obrigatória para validar o treino. Sem prova, sem mérito.", 409, {}, "V3_WORKOUT_VALIDATION_EVIDENCE_REQUIRED")
+    }
     const requestId = createV3RequestId()
-    const result = await apiRequest<GutoV3StateResponse>("/guto/v3/memory", {
+    const result = await apiRequest<GutoV3WorkoutValidationResponse>("/guto/v3/workout/validate", {
       method: "POST",
-      body: JSON.stringify({ requestId, xpEvent: "complete_daily_mission", language: payload.language }),
+      timeoutMs: 60000,
+      body: JSON.stringify({
+        requestId,
+        workoutSessionId: payload.workoutSessionId,
+        evidence,
+        language: payload.language,
+      }),
     })
-    const memory = gutoV3StateToMemory(result)
     const validation: WorkoutValidationRecord = {
-      id: requestId,
+      id: result.requestId,
       userId: payload.userId,
       createdAt: new Date().toISOString(),
       dateLabel: new Date().toISOString().slice(0, 10),
@@ -1349,9 +1463,9 @@ export async function validateWorkout(payload: {
       photoUrl: "",
       posterUrl: "",
       thumbUrl: "",
-      xp: memory.xpEvents.find((event) => event.id === requestId)?.amount || 100,
+      xp: result.xpGranted ? 100 : 0,
       status: "validated",
-      gutoMessage: "Missão confirmada pelo Cérebro V3.",
+      gutoMessage: "Missão confirmada pela autoridade V3 com prova (selfie).",
     }
     return { success: true as const, validation, validationHistory: [validation] }
   }

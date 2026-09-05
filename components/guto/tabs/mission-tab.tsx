@@ -28,6 +28,9 @@ interface MissionTabProps {
   onValidateWorkout: () => void
   missingProfileFields?: string[]
   memory?: GutoMemory | null
+  /** P0 (workout validation authority): stable logical session id shared by
+   * Mission/GUTO Online/ValidationFlow — required on the V3 path. */
+  workoutSessionId?: string | null
 }
 
 const MUSCLE_GROUP_LABEL: Record<string, Record<string, string>> = {
@@ -176,6 +179,7 @@ export function MissionTab({
   onValidateWorkout,
   missingProfileFields = [],
   memory = null,
+  workoutSessionId = null,
 }: MissionTabProps) {
   const validLang = getLanguage(language)
   const locale = translations[validLang]
@@ -523,6 +527,7 @@ export function MissionTab({
         language={validLang}
         userName={userName}
         evolution={evolution}
+        workoutSessionId={workoutSessionId}
         onFinish={() => {
           setCompletedExerciseIds(exercises.map((exercise) => exercise.id))
           setStarted(true)

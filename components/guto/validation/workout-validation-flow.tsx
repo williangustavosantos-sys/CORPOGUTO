@@ -13,7 +13,7 @@ import type {
   WorkoutLocationMode,
   WorkoutValidationRecord,
 } from "@/lib/api/guto"
-import { validateWorkout } from "@/lib/api/guto"
+import { isGutoV3Enabled, isV3ContextReconfirmationError, recordGutoV3WorkoutSessionExercises, validateWorkout } from "@/lib/api/guto"
 
 interface WorkoutValidationFlowProps {
   language: SupportedLanguage
@@ -22,6 +22,9 @@ interface WorkoutValidationFlowProps {
   workoutLabel: string
   locationMode: WorkoutLocationMode | null
   workoutPlan?: GutoWorkoutPlan | null
+  /** P0 (workout validation authority): stable logical session id shared by
+   * Mission/GUTO Online/ValidationFlow — required on the V3 path. */
+  workoutSessionId?: string
   onComplete: (validationHistory: WorkoutValidationRecord[]) => void
   onClose: () => void
 }
@@ -58,6 +61,7 @@ const copy = {
     errorTitle: "Algo deu errado",
     missingLocation: "Local do treino não está fechado. Volte e ajuste o local antes de validar.",
     incompleteWorkout: "Este treino está incompleto. GUTO precisa corrigir os exercícios antes de validar.",
+    reconfirmationRequired: "Seus dados mudaram. GUTO precisa confirmar os ajustes antes de fechar o treino.",
     feedbackTitle: "Como foi o treino?",
     feedbackSubtitle: "Responde curto. O GUTO usa isso para ajustar o próximo.",
     feedbackOptions: {
@@ -101,6 +105,7 @@ const copy = {
     errorTitle: "Something went wrong",
     missingLocation: "Workout location is not locked. Go back and set the location before validating.",
     incompleteWorkout: "This workout is incomplete. GUTO must fix the exercises before validation.",
+    reconfirmationRequired: "Your data changed. GUTO needs to confirm the adjustments before closing the workout.",
     feedbackTitle: "How did it feel?",
     feedbackSubtitle: "Keep it short. GUTO uses this to adjust the next one.",
     feedbackOptions: {
@@ -144,6 +149,7 @@ const copy = {
     errorTitle: "Qualcosa è andato storto",
     missingLocation: "Il luogo dell'allenamento non è definito. Torna indietro e impostalo prima di validare.",
     incompleteWorkout: "Questo allenamento è incompleto. GUTO deve correggere gli esercizi prima di validare.",
+    reconfirmationRequired: "I tuoi dati sono cambiati. GUTO deve confermare gli aggiustamenti prima di chiudere l'allenamento.",
     feedbackTitle: "Com'è andata?",
     feedbackSubtitle: "Risposta corta. GUTO la usa per regolare il prossimo.",
     feedbackOptions: {
@@ -183,6 +189,7 @@ export function WorkoutValidationFlow({
   workoutLabel,
   locationMode,
   workoutPlan,
+  workoutSessionId,
   onComplete,
   onClose,
 }: WorkoutValidationFlowProps) {
@@ -454,24 +461,48 @@ export function WorkoutValidationFlow({
       setUploadError(locale.incompleteWorkout)
       return
     }
+    // P0 (selfie é core): sem a foto capturada NÃO há validação — o fluxo V3
+    // não tem skip-camera e a autoridade backend também rejeita sem evidência.
+    if (!imageBase64Ref.current) {
+      setUploadError(locale.incompleteWorkout)
+      return
+    }
     let cancelled = false
-    void validateWorkout({
-      userId,
-      // P0 FIX: only send imageBase64 when user captured a photo.
-      // Empty string = skip-camera path — backend handles it without image.
-      imageBase64: imageBase64Ref.current || undefined,
-      workoutFocus,
-      workoutLabel,
-      locationMode,
-      language,
-      workoutPlan,
-      feedback: {
-        difficulty: feedbackDifficulty,
-        energy: feedbackEnergy,
-        painArea: feedbackDifficulty === "pain" ? feedbackPainArea.trim() : undefined,
-        note: feedbackNote.trim() || undefined,
-      },
-    })
+    const runValidation = async () => {
+      // P0 (workout validation authority): consolida os exercícios oficiais na
+      // sessão lógica ANTES da validação final (uma única fonte de eventos),
+      // depois fecha via /guto/v3/workout/validate (sessão + XP + rotação
+      // atômicas no backend, com prova).
+      if (isGutoV3Enabled()) {
+        if (!workoutSessionId) {
+          throw new Error("Sessão de treino ausente. Reabra a missão e tente novamente.")
+        }
+        await recordGutoV3WorkoutSessionExercises({
+          workoutSessionId,
+          workoutPlan: workoutPlan!,
+          feedbackDifficulty,
+        })
+      }
+      return validateWorkout({
+        userId,
+        // P0 FIX: only send imageBase64 when user captured a photo.
+        // Empty string = skip-camera path — backend handles it without image.
+        imageBase64: imageBase64Ref.current || undefined,
+        workoutSessionId,
+        workoutFocus,
+        workoutLabel,
+        locationMode,
+        language,
+        workoutPlan,
+        feedback: {
+          difficulty: feedbackDifficulty,
+          energy: feedbackEnergy,
+          painArea: feedbackDifficulty === "pain" ? feedbackPainArea.trim() : undefined,
+          note: feedbackNote.trim() || undefined,
+        },
+      })
+    }
+    runValidation()
       .then((result) => {
         if (cancelled) return
         setValidationResult({ validation: result.validation, validationHistory: result.validationHistory })
@@ -480,10 +511,18 @@ export function WorkoutValidationFlow({
       })
       .catch((err) => {
         if (cancelled) return
+        // P0 (409 runtime recovery): V3_CONTEXT_RECONFIRMATION_REQUIRED não é
+        // erro técnico — fecha o overlay para o gate de re-confirmação abrir
+        // (derivado do estado oficial no guto-app) e orienta o usuário.
+        if (isV3ContextReconfirmationError(err)) {
+          setUploadError(locale.reconfirmationRequired)
+          onClose()
+          return
+        }
         setUploadError(err instanceof Error ? err.message : "Erro ao validar missão.")
       })
     return () => { cancelled = true }
-  }, [step, userId, workoutFocus, workoutLabel, locationMode, language, locale.missingLocation, locale.incompleteWorkout, workoutPlan, feedbackDifficulty, feedbackEnergy, feedbackPainArea, feedbackNote])
+  }, [step, userId, workoutFocus, workoutLabel, locationMode, language, locale.missingLocation, locale.incompleteWorkout, locale.reconfirmationRequired, onClose, workoutPlan, workoutSessionId, feedbackDifficulty, feedbackEnergy, feedbackPainArea, feedbackNote])
 
   return (
     <div

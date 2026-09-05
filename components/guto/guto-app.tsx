@@ -22,7 +22,7 @@ import { LanguageScreen } from "./screens/language-screen"
 import type { MissionExercise } from "./view-models"
 import { WorkoutValidationFlow } from "./validation/workout-validation-flow"
 import { getApiErrorMessage } from "@/lib/api/client"
-import { acceptGutoConsent, getGutoMemory, gutoV3StateToMemory, hasConfirmedV3Context, isGutoV3Enabled, needsV3ContextReconfirmation, plansShareConfirmedV3Context, reconfirmGutoV3Context, saveGutoMemory, saveGutoV3Calibration, trackGutoEvent, validateGutoName, type DietFood, type DietMeal, type GutoMemory, type GutoNameValidation, type GutoTelemetryEvent, type GutoWorkoutPlan } from "@/lib/api/guto"
+import { acceptGutoConsent, createV3WorkoutSessionId, getGutoMemory, gutoV3StateToMemory, hasConfirmedV3Context, isGutoV3Enabled, needsV3ContextReconfirmation, plansShareConfirmedV3Context, reconfirmGutoV3Context, saveGutoMemory, saveGutoV3Calibration, trackGutoEvent, validateGutoName, type DietFood, type DietMeal, type GutoMemory, type GutoNameValidation, type GutoTelemetryEvent, type GutoWorkoutPlan } from "@/lib/api/guto"
 import { useAuth } from "@/components/auth-provider"
 import { getInvite, claimInvite, logout, deleteOwnAccount, revokeConsent, type InvitePreview } from "@/lib/api/auth"
 import type { EvolutionStage, SupportedLanguage } from "@/types/contract"
@@ -818,6 +818,11 @@ export function GutoApp({
   const [nameGate, setNameGate] = useState<NameGate | null>(null)
   const [isValidatingName, setIsValidatingName] = useState(false)
   const [showValidationFlow, setShowValidationFlow] = useState(false)
+  // P0 (workout validation authority): uma execução lógica de treino tem UM
+  // workoutSessionId estável (Mission/GUTO Online/ValidationFlow). Gerado na
+  // abertura da validação e renovado após sucesso — reload/retry nunca
+  // reutilizam sessão completada (XP exactly-once no backend).
+  const [v3WorkoutSessionId, setV3WorkoutSessionId] = useState<string | null>(null)
   const [arenaRefreshKey, setArenaRefreshKey] = useState(0)
   const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(null)
   const [inviteClaimData, setInviteClaimData] = useState<InvitePreview | null>(null)
@@ -2436,27 +2441,37 @@ export function GutoApp({
   }, [])
 
   const handleMissionComplete = useCallback(async () => {
-    const updated = await saveGutoMemory({
-      userId: gutoUserId,
-      language: selectedLanguage,
-      xpEvent: "complete_daily_mission",
-    })
+    // P0 (workout validation authority): no V3 a missão só fecha pela validação
+    // oficial (selfie → /guto/v3/workout/validate) — nunca por /memory.
+    const updated = isGutoV3Enabled()
+      ? null
+      : await saveGutoMemory({
+          userId: gutoUserId,
+          language: selectedLanguage,
+          xpEvent: "complete_daily_mission",
+        })
     gutoAudio.playGutoFeedback("success")
-    setMemory(updated)
-    setEvolution(resolveEvolutionStage(updated.totalXp || 0))
+    if (updated) {
+      setMemory(updated)
+      setEvolution(resolveEvolutionStage(updated.totalXp || 0))
+    }
     trackBehaviorEvent("mission_completed", { missionType: "daily" })
     setActiveTab("caminho")
   }, [gutoUserId, selectedLanguage, trackBehaviorEvent])
 
   const handleAdaptedMissionComplete = useCallback(async () => {
-    const updated = await saveGutoMemory({
-      userId: gutoUserId,
-      language: selectedLanguage,
-      xpEvent: "accept_adapted_mission",
-    })
+    const updated = isGutoV3Enabled()
+      ? null
+      : await saveGutoMemory({
+          userId: gutoUserId,
+          language: selectedLanguage,
+          xpEvent: "accept_adapted_mission",
+        })
     gutoAudio.playGutoFeedback("success")
-    setMemory(updated)
-    setEvolution(resolveEvolutionStage(updated.totalXp || 0))
+    if (updated) {
+      setMemory(updated)
+      setEvolution(resolveEvolutionStage(updated.totalXp || 0))
+    }
     trackBehaviorEvent("mission_completed", { missionType: "adapted" })
     setActiveTab("caminho")
   }, [gutoUserId, selectedLanguage, trackBehaviorEvent])
@@ -2576,9 +2591,14 @@ export function GutoApp({
             adaptedMissionToday={Boolean(memory?.adaptedMissionToday)}
             onMissionComplete={handleMissionComplete}
             onAdaptedMissionComplete={handleAdaptedMissionComplete}
-            onValidateWorkout={() => setShowValidationFlow(true)}
+            onValidateWorkout={() => {
+              // P0: sessão lógica estável criada uma vez por execução.
+              setV3WorkoutSessionId((current) => current ?? createV3WorkoutSessionId())
+              setShowValidationFlow(true)
+            }}
             missingProfileFields={workoutMissingFields}
             memory={memory}
+            workoutSessionId={v3WorkoutSessionId}
           />
         )
       case "arena":
@@ -2604,7 +2624,7 @@ export function GutoApp({
       default:
         return null
     }
-  }, [activeTab, applyMemoryPatch, arenaRefreshKey, evolution, gutoUserId, handleAdaptedMissionComplete, handleExerciseQuestion, handleFoodDoubt, handleMissionComplete, localizedWorkoutPlan, memory, selectedLanguage, userLabel, workoutMissingFields])
+  }, [activeTab, applyMemoryPatch, arenaRefreshKey, evolution, gutoUserId, handleAdaptedMissionComplete, handleExerciseQuestion, handleFoodDoubt, handleMissionComplete, localizedWorkoutPlan, memory, selectedLanguage, userLabel, v3WorkoutSessionId, workoutMissingFields])
 
   if (authLoading || !isHydrated || (user && user.role !== "student")) {
     return (
@@ -3947,7 +3967,11 @@ export function GutoApp({
               workoutLabel={localizedWorkoutPlan?.focus || ""}
               locationMode={validationLocationMode}
               workoutPlan={localizedWorkoutPlan}
+              workoutSessionId={v3WorkoutSessionId ?? undefined}
               onComplete={(validationHistory) => {
+                // P0: execução encerrada — próxima validação gera sessão nova
+                // (o backend deduplica XP por sessão, nunca reusa completada).
+                setV3WorkoutSessionId(null)
                 // Optimistic: update validation history immediately
                 setMemory((prev) => prev ? { ...prev, validationHistory } : prev)
                 setShowValidationFlow(false)

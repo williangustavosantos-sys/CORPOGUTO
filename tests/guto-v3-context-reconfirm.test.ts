@@ -316,7 +316,10 @@ test("gate montado no app com superfície CONFIRMAR/CORRIGIR (estado de produto,
   assert.match(gateSource, /CONFIRMAR AJUSTES/)
   assert.match(gateSource, /CORRIGIR/)
   assert.match(gateSource, /data-testid="guto-v3-context-reconfirm-gate"/)
-  // O chat não precisa mais cair em fallback genérico quando o gate existe:
-  // a decisão é derivada do estado oficial antes de qualquer turno.
-  assert.doesNotMatch(chatSource, /V3_CONTEXT_RECONFIRMATION_REQUIRED/)
+  // O chat NÃO mostra erro de conexão para o 409: reconhece o código no
+  // runtime (isV3ContextReconfirmationError), faz readback do estado oficial
+  // e deixa o gate abrir (recovery §14) — nunca fallback genérico.
+  assert.match(chatSource, /isV3ContextReconfirmationError\(error\)/)
+  assert.match(chatSource, /copy\.reconfirmationRequired/)
+  assert.match(chatSource, /getGutoV3State\(createGutoTurnId\(userId\)\)/)
 })

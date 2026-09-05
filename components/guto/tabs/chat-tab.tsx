@@ -17,6 +17,7 @@ import {
   getGutoProactive,
   getGutoV3State,
   getProactiveMemories,
+  isV3ContextReconfirmationError,
   gutoV3StateToMemory,
   hasConfirmedV3Context,
   isGutoV3FirstContactActive,
@@ -184,6 +185,7 @@ const chatCopy: Record<
     audioFailure: string
     emptyResponseFallback: string
     connectionError: string
+    reconfirmationRequired: string
     xpRewardLabel: string
     xpCardTitle: string
     xpCardBody: string
@@ -215,6 +217,8 @@ const chatCopy: Record<
     audioFailure: "O áudio falhou. Sem perder o ritmo: escreve a mesma resposta em uma frase curta.",
     emptyResponseFallback: "Ixi, meu sistema engasgou por um segundo. Me manda de novo em uma frase que eu resolvo.",
     connectionError: "Ixi, deu um curto na conexão aqui. Aguenta aí e me manda de novo em 1 frase.",
+    reconfirmationRequired:
+      "Seus dados mudaram e eu preciso confirmar os ajustes antes de atualizar teu plano. Confirma no aviso que apareceu.",
     xpRewardLabel: "Prêmio Inicial • Guto Ativo",
     xpCardTitle: "+100 XP",
     xpCardBody:
@@ -248,6 +252,8 @@ const chatCopy: Record<
     audioFailure: "Audio failed. No need to stop — just type your answer in one short sentence.",
     emptyResponseFallback: "My system hiccuped for a second. Send it again in one sentence and I will handle it.",
     connectionError: "Connection shorted out on my side for a moment. Hold on and send it again in 1 sentence.",
+    reconfirmationRequired:
+      "Your data changed and I need to confirm the adjustments before updating your plan. Confirm in the notice that appeared.",
     xpRewardLabel: "Initial Reward • GUTO Active",
     xpCardTitle: "+100 XP",
     xpCardBody:
@@ -281,6 +287,8 @@ const chatCopy: Record<
     audioFailure: "Audio fallito. Senza perdere il ritmo: scrivi la stessa risposta in una frase breve.",
     emptyResponseFallback: "Mi si è inceppato il sistema per un secondo. Mandamelo di nuovo in una frase e lo sistemo.",
     connectionError: "Mi è saltata la connessione per un attimo. Aspetta un secondo e rimandamelo in 1 frase.",
+    reconfirmationRequired:
+      "I tuoi dati sono cambiati e devo confermare gli aggiustamenti prima di aggiornare il piano. Conferma nell'avviso che è apparso.",
     xpRewardLabel: "Premio Iniziale • GUTO Attivo",
     xpCardTitle: "+100 XP",
     xpCardBody:
@@ -1130,10 +1138,14 @@ export function ChatTab({
     activeDietContextRef.current = null
     activeContextRef.current = null
     setContextChip(null)
-    activeContextSyncRef.current = setGutoActiveContext(null).then((persisted) => {
-      onMemoryPatch?.({ activeContext: persisted })
-      return persisted
-    })
+    // P0 (chat lock): a promise guardada nunca rejeita — sem unhandled
+    // rejection e o send nunca fica travado se a sincronização falhar.
+    activeContextSyncRef.current = setGutoActiveContext(null)
+      .then((persisted) => {
+        onMemoryPatch?.({ activeContext: persisted })
+        return persisted
+      })
+      .catch(() => null)
   }, [onMemoryPatch])
 
   const wrapWithActiveContext = useCallback((text: string) => {
@@ -1659,7 +1671,12 @@ export function ChatTab({
     const safeLanguage = getLanguage(language) as SupportedLanguage
 
     if (activeContextSyncRef.current) {
-      await activeContextSyncRef.current
+      try {
+        await activeContextSyncRef.current
+      } catch {
+        // Sincronização de contexto falhou (ex.: 409/5xx): o turno segue com o
+        // snapshot local e o lock de envio NUNCA fica travado (finally abaixo).
+      }
     }
     const activeContextSnapshot = activeContextRef.current
 
@@ -1846,19 +1863,42 @@ export function ChatTab({
       }
       pendingTurnRef.current = null
       setPendingTurn(null)
-    } catch {
+    } catch (error) {
       syncExpectedResponse(null, null)
       stopTypingLoop()
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `g-err-${Date.now()}`,
-          text: copy.connectionError,
-          isGuto: true,
-          timestamp: new Date(),
-          avatarEmotion: "default",
-        },
-      ])
+      // P0 (409 runtime recovery): V3_CONTEXT_RECONFIRMATION_REQUIRED NÃO é
+      // erro de conexão. Releia o estado oficial, aplique-o e deixe o
+      // ContextReconfirmGate abrir (derivado de needsV3ContextReconfirmation
+      // no guto-app); a mutação stale nunca é aceita silenciosamente.
+      if (isV3ContextReconfirmationError(error)) {
+        try {
+          const official = gutoV3StateToMemory(await getGutoV3State(createGutoTurnId(userId)))
+          onMemoryPatch?.(official)
+        } catch {
+          // Estado oficial indisponível no readback: o gate continua derivado
+          // do último boot; sem erro genérico de conexão.
+        }
+        setMessages((prev) => appendMessagesWithoutDuplicateGuto(prev, [
+          {
+            id: `g-ctx-reconfirm-${Date.now()}`,
+            text: copy.reconfirmationRequired,
+            isGuto: true,
+            timestamp: new Date(),
+            avatarEmotion: "default",
+          },
+        ]))
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `g-err-${Date.now()}`,
+            text: copy.connectionError,
+            isGuto: true,
+            timestamp: new Date(),
+            avatarEmotion: "default",
+          },
+        ])
+      }
       pendingTurnRef.current = null
       setPendingTurn(null)
     } finally {
@@ -1944,11 +1984,15 @@ export function ChatTab({
       updatedAt: now,
     }
     activeContextRef.current = nextContext
-    activeContextSyncRef.current = setGutoActiveContext(nextContext).then((persisted) => {
-      activeContextRef.current = persisted
-      onMemoryPatch?.({ activeContext: persisted })
-      return persisted
-    })
+    // P0 (chat lock): a promise guardada nunca rejeita — sem unhandled
+    // rejection e o send nunca fica travado se a sincronização falhar.
+    activeContextSyncRef.current = setGutoActiveContext(nextContext)
+      .then((persisted) => {
+        activeContextRef.current = persisted
+        onMemoryPatch?.({ activeContext: persisted })
+        return persisted
+      })
+      .catch(() => null)
 
     const hintText = copy.exerciseContextHint(exercise.name)
     const hintId = `g-exercise-ctx-${pendingExerciseQuestion.id}`
@@ -2017,11 +2061,15 @@ export function ChatTab({
       updatedAt: now,
     }
     activeContextRef.current = nextContext
-    activeContextSyncRef.current = setGutoActiveContext(nextContext).then((persisted) => {
-      activeContextRef.current = persisted
-      onMemoryPatch?.({ activeContext: persisted })
-      return persisted
-    })
+    // P0 (chat lock): a promise guardada nunca rejeita — sem unhandled
+    // rejection e o send nunca fica travado se a sincronização falhar.
+    activeContextSyncRef.current = setGutoActiveContext(nextContext)
+      .then((persisted) => {
+        activeContextRef.current = persisted
+        onMemoryPatch?.({ activeContext: persisted })
+        return persisted
+      })
+      .catch(() => null)
 
     const hintText = copy.mealContextHint(food.name)
     const hintId = `g-meal-ctx-${meal.id}-${food.name}`
