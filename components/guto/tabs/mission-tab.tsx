@@ -26,6 +26,13 @@ interface MissionTabProps {
   onMissionComplete: () => Promise<void> | void
   onAdaptedMissionComplete: () => Promise<void> | void
   onValidateWorkout: () => void
+  /** P0 (workout validation authority): fired when a logical execution really
+   * starts (manual Mission start / opening GUTO PERSONAL ONLINE). The parent
+   * creates the stable workoutSessionId HERE — never only at validation. */
+  onExecutionStart?: () => void
+  /** P0 (workout validation authority): fired when the user aborts/resets the
+   * current manual execution — the parent may release the stale session id. */
+  onExecutionAbort?: () => void
   missingProfileFields?: string[]
   memory?: GutoMemory | null
   /** P0 (workout validation authority): stable logical session id shared by
@@ -177,6 +184,8 @@ export function MissionTab({
   trainedToday = false,
   adaptedMissionToday = false,
   onValidateWorkout,
+  onExecutionStart,
+  onExecutionAbort,
   missingProfileFields = [],
   memory = null,
   workoutSessionId = null,
@@ -242,6 +251,9 @@ export function MissionTab({
   const toggleExercise = (exerciseId: string) => {
     if (trainedToday || adaptedMissionToday) return
     setStarted(true)
+    // P0 (workout validation authority): tocar num exercício também INICIA a
+    // execução — a sessão lógica nasce aqui, não na validação.
+    onExecutionStart?.()
     setCompletedExerciseIds((current) =>
       current.includes(exerciseId)
         ? current.filter((id) => id !== exerciseId)
@@ -436,6 +448,10 @@ export function MissionTab({
             type="button"
             onClick={() => {
               gutoAudio.playGutoFeedback('transition')
+              // P0 (workout validation authority): abrir o GUTO PERSONAL ONLINE
+              // INICIA uma execução lógica — a sessão nasce aqui (nunca só na
+              // validação).
+              onExecutionStart?.()
               setStarted(true)
               setOnlineOpen(true)
             }}
@@ -451,10 +467,14 @@ export function MissionTab({
               if (trainedToday || adaptedMissionToday) return
               gutoAudio.playGutoFeedback('tap')
               if (started) {
+                onExecutionAbort?.()
                 setStarted(false)
                 setCompletedExerciseIds([])
                 return
               }
+              // P0 (workout validation authority): iniciar a Missão manual
+              // também gera a sessão lógica agora.
+              onExecutionStart?.()
               setStarted(true)
             }}
             className="guto-slot guto-big-touch grid shrink-0 place-items-center rounded-full disabled:opacity-45"

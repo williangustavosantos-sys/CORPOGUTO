@@ -2,6 +2,7 @@ import { apiRequest, ApiError } from "./client"
 import { assertValidGutoUserId } from "../guto-user-id"
 import { Country } from "country-state-city"
 import { localizeFoodName } from "../food-l10n"
+import { deriveWorkoutExerciseRequestId } from "../guto-v3-execution"
 
 export type SupportedLanguage = "pt-BR" | "it-IT" | "en-US"
 export type WorkoutLocationMode = "gym" | "home" | "park"
@@ -1388,13 +1389,23 @@ export async function recordGutoV3WorkoutSessionExercises(payload: {
     throw new ApiError("Este treino não tem exercícios oficiais V3 para registrar.", 409, {}, "V3_WORKOUT_EXERCISES_EMPTY")
   }
   for (const [index, exercise] of exercises.entries()) {
-    const repetitions = Number(String(exercise.reps || "").replace(/[^0-9]/g, ""))
+    // P0 (exactly-once): the requestId is DERIVED deterministically from the
+    // session + plan item + logical order — a retry/reload/network failure can
+    // never generate a second historical execution (backend dedupes on
+    // requestId). Never Date.now/random here.
+    const requestId = deriveWorkoutExerciseRequestId({
+      workoutSessionId: payload.workoutSessionId,
+      planItemId: exercise.id,
+      order: exercise.order ?? index,
+    })
     await recordGutoV3WorkoutExerciseEvent({
-      requestId: createV3RequestId(),
+      requestId,
       exerciseId: exercise.exerciseId!,
       workoutSessionId: payload.workoutSessionId,
       setsCompleted: exercise.sets || 1,
-      ...(Number.isFinite(repetitions) && repetitions > 0 ? { repetitions } : {}),
+      // P0 (no fabricated execution): a prescription range ("8-12") is NOT an
+      // execution result. repetitions only ever carries a REAL observed count;
+      // the Mission/Online checklist has no rep counter, so it is omitted.
       completed: true,
       context: {
         source: "validation_flow",
@@ -1412,6 +1423,10 @@ export interface GutoV3WorkoutValidationResponse {
   traceId: string
   status: "completed"
   xpGranted: boolean
+  /** P2 (xpAmount authority): the REAL amount this request inserted (100 or 50
+   * on a fresh grant, 0 on replay/same-day duplicate). The UI must display
+   * this value — never an assumed 100. */
+  xpAmount: number
   nextSessionIndex: number
   evidence: { sha256: string; mime: string; byteLength: number }
 }
@@ -1463,7 +1478,9 @@ export async function validateWorkout(payload: {
       photoUrl: "",
       posterUrl: "",
       thumbUrl: "",
-      xp: result.xpGranted ? 100 : 0,
+      // P2 (xpAmount authority): backend is the authority — show the real
+      // amount (100/50 on a fresh grant, 0 on replay). Never assume 100.
+      xp: result.xpAmount,
       status: "validated",
       gutoMessage: "Missão confirmada pela autoridade V3 com prova (selfie).",
     }

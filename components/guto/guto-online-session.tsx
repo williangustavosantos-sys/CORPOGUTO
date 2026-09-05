@@ -21,7 +21,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Clock, RotateCcw, Undo2, X } from "lucide-react"
 
 import type { GutoWorkoutPlan } from "@/lib/api/guto"
-import { clearActiveExercise, isGutoV3Enabled, setActiveExercise } from "@/lib/api/guto"
+import {
+  clearActiveExercise,
+  isGutoV3Enabled,
+  recordGutoV3WorkoutExerciseEvent,
+  setActiveExercise,
+} from "@/lib/api/guto"
+import { deriveWorkoutExerciseRequestId } from "@/lib/guto-v3-execution"
 import type { EvolutionStage } from "@/types/contract"
 import { GutoVividAvatar } from "@/components/guto/guto-vivid-avatar"
 
@@ -447,6 +453,52 @@ export function GutoOnlineSession({
       warmupCompleted: state.warmupCompleted,
     }
   }, [open, ready, state, exercises, currentExercise, totalSets, language, userName, speak, onFinish])
+
+  // ─── V3 exercise events (P0, founder gate) ──────────────────────────────
+  // When an exercise is EFFECTIVELY completed in the Online cockpit (all its
+  // prescribed sets recorded), the official V3 event is sent through
+  // session-exercises with a DETERMINISTIC requestId (workoutSessionId + plan
+  // item + logical order). The validation flow replays the SAME derived ids,
+  // so the backend dedupes — exercise history stays exactly-once even when
+  // Online and ValidationFlow both describe the same session. No XP, no
+  // session completion here — /workout/validate stays the only authority.
+  const recordedOnlineEventsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!open || !ready) return
+    if (!isGutoV3Enabled()) return
+    if (!workoutSessionId) return
+    const setsByExercise = new Map<string, number>()
+    for (const set of state.completedSets) {
+      setsByExercise.set(set.exerciseId, (setsByExercise.get(set.exerciseId) || 0) + 1)
+    }
+    for (const exercise of exercises) {
+      if (!exercise || !exercise.exerciseId || !exercise.id) continue
+      const realSets = setsByExercise.get(exercise.id) || 0
+      if (realSets < (exercise.sets || 1)) continue // not effectively completed
+      const key = `${workoutSessionId}:${exercise.id}:${exercise.order ?? 0}`
+      if (recordedOnlineEventsRef.current.has(key)) continue
+      recordedOnlineEventsRef.current.add(key)
+      // P0 (no fabricated execution data): repetitions only when a real
+      // observed count exists — the cockpit has no rep counter, so it is
+      // omitted (a prescription range is NOT an execution result).
+      void recordGutoV3WorkoutExerciseEvent({
+        requestId: deriveWorkoutExerciseRequestId({
+          workoutSessionId,
+          planItemId: exercise.id,
+          order: exercise.order ?? 0,
+        }),
+        exerciseId: exercise.exerciseId,
+        workoutSessionId,
+        setsCompleted: realSets,
+        completed: true,
+        context: { source: "guto_online", order: exercise.order ?? 0, workoutPlanId: workoutPlan.studentId || null },
+      }).catch(() => {
+        // Rede/backend indisponíveis durante a sessão: não trava o cockpit —
+        // a validação final reenvia o MESMO requestId determinístico e o
+        // backend deduplica (nunca vira segunda execução histórica).
+      })
+    }
+  }, [open, ready, workoutSessionId, state.completedSets, exercises, workoutPlan.studentId])
 
   // ─── Handlers ────────────────────────────────────────────────────────────
   const handleWarmupDone = useCallback(() => {

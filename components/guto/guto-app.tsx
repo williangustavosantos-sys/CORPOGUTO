@@ -819,8 +819,9 @@ export function GutoApp({
   const [isValidatingName, setIsValidatingName] = useState(false)
   const [showValidationFlow, setShowValidationFlow] = useState(false)
   // P0 (workout validation authority): uma execução lógica de treino tem UM
-  // workoutSessionId estável (Mission/GUTO Online/ValidationFlow). Gerado na
-  // abertura da validação e renovado após sucesso — reload/retry nunca
+  // workoutSessionId estável (Mission/GUTO Online/ValidationFlow). Gerado
+  // quando a execução REALMENTE começa (start da Missão / abrir GUTO PERSONAL
+  // ONLINE) e renovado após sucesso da validação — reload/retry nunca
   // reutilizam sessão completada (XP exactly-once no backend).
   const [v3WorkoutSessionId, setV3WorkoutSessionId] = useState<string | null>(null)
   const [arenaRefreshKey, setArenaRefreshKey] = useState(0)
@@ -2592,9 +2593,20 @@ export function GutoApp({
             onMissionComplete={handleMissionComplete}
             onAdaptedMissionComplete={handleAdaptedMissionComplete}
             onValidateWorkout={() => {
-              // P0: sessão lógica estável criada uma vez por execução.
+              // P0: fallback defensivo — se por qualquer motivo a execução ainda
+              // não ganhou sessão (ex.: plano trocado no meio), cria aqui. O
+              // happy path já a criou no início da execução.
               setV3WorkoutSessionId((current) => current ?? createV3WorkoutSessionId())
               setShowValidationFlow(true)
+            }}
+            onExecutionStart={() => {
+              // P0: a sessão lógica nasce quando a execução começa.
+              setV3WorkoutSessionId((current) => current ?? createV3WorkoutSessionId())
+            }}
+            onExecutionAbort={() => {
+              // P0: abortar/reabrir a execução libera a sessão — a próxima
+              // execução começa com um id novo (nunca reusa a anterior).
+              setV3WorkoutSessionId(null)
             }}
             missingProfileFields={workoutMissingFields}
             memory={memory}
