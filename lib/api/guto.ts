@@ -1290,17 +1290,22 @@ export async function saveGutoMemory(payload: {
 }) {
   assertValidGutoUserId(payload.userId)
   if (isGutoV3Enabled()) {
-    // P0 (workout validation authority): no V3 o /memory NUNCA carrega xpEvent —
-    // XP de missão só existe pela validação oficial /guto/v3/workout/validate
-    // (selfie + sessão + XP + rotação atômicas). O bypass completo_daily_mission
-    // é impossível do lado do cliente (xpEvent: undefined é descartado pelo
-    // JSON.stringify).
+    // P0 (workout validation authority): no V3 o /memory NUNCA carrega
+    // complete_daily_mission — XP de missão só existe pela validação oficial
+    // /guto/v3/workout/validate (selfie + sessão + XP + rotação atômicas).
+    // O ÚNICO xpEvent legítimo via /memory é grant_initial_xp (pacto inicial —
+    // backend chama completePact: selo do pacto + XP exactly-once).
+    const { xpEvent, ...rest } = payload
+    const allowedXpEvent =
+      xpEvent === "grant_initial_xp"
+        ? xpEvent
+        : undefined
     const result = await apiRequest<GutoV3StateResponse>("/guto/v3/memory", {
       method: "POST",
       timeoutMs: GUTO_MEMORY_IO_TIMEOUT_MS,
       body: JSON.stringify({
-        ...payload,
-        xpEvent: undefined,
+        ...rest,
+        xpEvent: allowedXpEvent,
         userId: undefined,
         lastWorkoutPlan: undefined,
         requestId: createV3RequestId(),

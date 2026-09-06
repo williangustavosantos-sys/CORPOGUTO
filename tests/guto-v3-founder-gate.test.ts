@@ -25,12 +25,14 @@ const appSource = readFileSync(new URL("../components/guto/guto-app.tsx", import
 test("A. V3 não usa mais /guto/v3/memory complete_daily_mission como autoridade de conclusão", () => {
   // A única rota de conclusão V3 usada pelo frontend é /guto/v3/workout/validate.
   assert.match(gutoSource, /\/guto\/v3\/workout\/validate/)
-  // O corpo V3 do saveGutoMemory NUNCA carrega xpEvent (bypass impossível).
+  // O corpo V3 do saveGutoMemory nunca carrega complete_daily_mission (bypass
+  // impossível). O ÚNICO xpEvent permitido é grant_initial_xp (pacto).
   const v3MemoryBody = gutoSource.slice(
     gutoSource.indexOf("export async function saveGutoMemory"),
-    gutoSource.indexOf("export async function saveGutoMemory") + 1600,
+    gutoSource.indexOf("export async function saveGutoMemory") + 1800,
   )
-  assert.match(v3MemoryBody, /xpEvent: undefined,/)
+  assert.match(v3MemoryBody, /allowedXpEvent/)
+  assert.match(v3MemoryBody, /xpEvent === "grant_initial_xp"/)
   assert.doesNotMatch(v3MemoryBody, /xpEvent: "complete_daily_mission"/)
   // handleMissionComplete no V3 não envia XP por /memory (navegação apenas).
   const appBlock = appSource.slice(appSource.indexOf("const handleMissionComplete"))
