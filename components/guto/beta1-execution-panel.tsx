@@ -6,7 +6,9 @@ import { CheckCircle2, X } from "lucide-react"
 import {
   completeGutoBeta1Workout,
   recordGutoBeta1ExecutionFeedback,
+  recordGutoBeta1SessionFeedback,
   type Beta1DifficultyLabel,
+  type Beta1PresenceSummary,
 } from "@/lib/api/guto"
 import { gutoAudio } from "@/lib/audio-haptics"
 
@@ -48,6 +50,12 @@ const copy = {
     completeHint: "Sem câmera na Beta 1: o GUTO registra o que você executou.",
     completedTitle: "Treino concluído!",
     completedBody: "O GUTO aprendeu com esta sessão e já considera o histórico no próximo treino.",
+    // PRESENCE (Etapa B): the ONE question, GUTO-first — never a form label.
+    presenceKicker: "O GUTO viu o que você fez hoje.",
+    presenceReplyLabel: "Responde com suas palavras…",
+    presenceReplyPlaceholder: "ex: dormindo mal essa semana / o treino tá pesado",
+    presenceSend: "ENVIAR",
+    presenceThanks: "Anotado. Vou usar isso no teu próximo treino.",
     emptySets: "Informe pelo menos uma série antes de concluir.",
     error: "Não foi possível registrar. Tente novamente.",
   },
@@ -63,6 +71,11 @@ const copy = {
     completeHint: "No camera in Beta 1: GUTO records what you actually performed.",
     completedTitle: "Workout completed!",
     completedBody: "GUTO learned from this session and will use it in your next workout.",
+    presenceKicker: "GUTO saw what you did today.",
+    presenceReplyLabel: "Answer in your own words…",
+    presenceReplyPlaceholder: "e.g. sleeping badly this week / training is too heavy",
+    presenceSend: "SEND",
+    presenceThanks: "Noted. I'll use this in your next workout.",
     emptySets: "Log at least one set before finishing.",
     error: "Could not save. Try again.",
   },
@@ -78,6 +91,11 @@ const copy = {
     completeHint: "Nessuna telecamera nella Beta 1: GUTO registra ciò che hai svolto.",
     completedTitle: "Allenamento completato!",
     completedBody: "GUTO ha imparato da questa sessione e la userà nel prossimo allenamento.",
+    presenceKicker: "GUTO ha visto cosa hai fatto oggi.",
+    presenceReplyLabel: "Rispondi con le tue parole…",
+    presenceReplyPlaceholder: "es. sto dormendo male / l'allenamento è pesante",
+    presenceSend: "INVIA",
+    presenceThanks: "Annotato. Lo userò nel tuo prossimo allenamento.",
     emptySets: "Registra almeno una serie prima di terminare.",
     error: "Impossibile salvare. Riprova.",
   },
@@ -105,11 +123,28 @@ export function Beta1ExecutionPanel({ open, language, workoutSessionId, exercise
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
+  // PRESENCE loop: the backend decides the outcome; the UI only phrases it.
+  const [presence, setPresence] = useState<Beta1PresenceSummary | null>(null)
+  const [causeText, setCauseText] = useState("")
+  const [presenceBusy, setPresenceBusy] = useState(false)
+  const [causeAck, setCauseAck] = useState(false)
 
   const current = useMemo(
     () => exercises.find((exercise) => exercise.id === exerciseId) ?? exercises[0] ?? null,
     [exercises, exerciseId],
   )
+
+  /** Session-level feeling = the label the user reported most this session. */
+  const mostReportedDifficulty = (): Beta1DifficultyLabel => {
+    const counts = new Map<Beta1DifficultyLabel, number>()
+    for (const label of Object.values(difficulty)) counts.set(label, (counts.get(label) ?? 0) + 1)
+    let best: Beta1DifficultyLabel = "BOA"
+    let bestCount = -1
+    for (const [label, count] of counts) {
+      if (count > bestCount) { best = label; bestCount = count }
+    }
+    return best
+  }
 
   if (!open || !workoutSessionId) return null
 
@@ -190,10 +225,40 @@ export function Beta1ExecutionPanel({ open, language, workoutSessionId, exercise
       gutoAudio.playGutoFeedback("success")
       setDone(true)
       onCompleted()
+      // PRESENCE: ask how the session FELT (the only unknown). Answer lands in
+      // the session-feedback loop; failures never block the completion.
+      try {
+        const response = await recordGutoBeta1SessionFeedback({
+          workoutSessionId,
+          overallDifficulty: mostReportedDifficulty(),
+          pain: Object.values(difficulty).some((label) => label === "DOR"),
+        })
+        setPresence(response.presence)
+      } catch { /* presence is additive */ }
     } catch {
       setError(t.error)
     } finally {
       setBusy(false)
+    }
+  }
+
+  const handleSendCause = async () => {
+    if (!presence || presenceBusy) return
+    const explanation = causeText.trim()
+    if (!explanation) return
+    setPresenceBusy(true)
+    try {
+      const response = await recordGutoBeta1SessionFeedback({
+        workoutSessionId,
+        overallDifficulty: mostReportedDifficulty(),
+        pain: Object.values(difficulty).some((label) => label === "DOR"),
+        causeExplanation: explanation,
+      })
+      setPresence(response.presence)
+      setCauseText("")
+      setCauseAck(true)
+    } catch { /* keep the question; user can retry */ } finally {
+      setPresenceBusy(false)
     }
   }
 
@@ -204,6 +269,42 @@ export function Beta1ExecutionPanel({ open, language, workoutSessionId, exercise
           <CheckCircle2 className="mx-auto h-10 w-10 text-(--guto-cyan)" strokeWidth={2.2} />
           <h2 className="guto-tab-title mt-3">{t.completedTitle}</h2>
           <p className="guto-tab-subtitle">{t.completedBody}</p>
+          {presence && (
+            <div className="mt-4 rounded-[0.9rem] border border-[rgba(82,231,255,0.25)] bg-white/60 px-3 py-3 text-left">
+              <p className="font-mono text-[8px] font-black uppercase tracking-[0.18em] text-[rgba(13,35,65,0.45)]">
+                {t.presenceKicker}
+              </p>
+              {presence.knownFactsEcho.length > 0 && (
+                <p className="mt-1.5 text-[11px] font-semibold leading-snug text-[rgba(13,35,65,0.55)]">
+                  {presence.knownFactsEcho.join(" · ")}
+                </p>
+              )}
+              {causeAck ? (
+                <p className="mt-2 text-[12px] font-bold leading-snug text-(--guto-navy)">{t.presenceThanks}</p>
+              ) : presence.contextualQuestion ? (
+                <>
+                  <p className="mt-2 text-[13px] font-bold leading-snug text-(--guto-navy)">
+                    {presence.contextualQuestion}
+                  </p>
+                  <textarea
+                    value={causeText}
+                    onChange={(event) => setCauseText(event.target.value)}
+                    placeholder={t.presenceReplyPlaceholder}
+                    rows={2}
+                    className="guto-slot mt-2 w-full rounded-[0.7rem] px-2.5 py-2 text-[12px] font-semibold text-(--guto-navy) outline-none placeholder:text-[rgba(13,35,65,0.35)]"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSendCause}
+                    disabled={presenceBusy || causeText.trim().length === 0}
+                    className="guto-cta-ghost mt-2 w-full disabled:opacity-40"
+                  >
+                    {t.presenceSend}
+                  </button>
+                </>
+              ) : null}
+            </div>
+          )}
           <button type="button" onClick={onClose} className="guto-cta-primary mt-4">{t.close}</button>
         </div>
       </div>

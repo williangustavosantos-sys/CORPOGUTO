@@ -54,6 +54,9 @@ async function proxyToBackend(request: NextRequest, context: RouteContext) {
   if (requestId) headers.set("x-request-id", requestId)
   const oidcToken = await getVercelOidcToken()
   if (oidcToken) headers.set("x-vercel-trusted-oidc-idp-token", oidcToken)
+  // Ponte para Deployment Protection do backend preview (automation bypass)
+  // enquanto Trusted Sources (dashboard) não é configurado entre os projetos.
+  if (process.env.VERCEL_BYPASS_SECRET) headers.set("x-vercel-protection-bypass", process.env.VERCEL_BYPASS_SECRET)
 
   const hasBody = !["GET", "HEAD"].includes(request.method)
   const upstream = await fetch(target, {

@@ -1528,6 +1528,24 @@ export interface Beta1WorkoutCompletionResult {
   progressSnapshots: Array<{ exerciseId: string; trend: string; reasonCodes: string[] }>
 }
 
+/** PRESENCE (BETA1 Etapa B): deterministic session outcome derived from real
+ * execution + feedback history. The LLM never decides which facts are true. */
+export interface Beta1PresenceSummary {
+  outcome: "PROGRESS" | "MAINTAIN" | "REGRESS" | "INVESTIGATE" | "ADAPT" | "SAFETY"
+  reasonCode: string
+  contextualQuestion: string | null
+  trend: "IMPROVING" | "STABLE" | "NEEDS_INVESTIGATION" | "INSUFFICIENT_DATA"
+  knownFactsEcho: string[]
+}
+
+/** The ONE question GUTO asks at completion (the only unknown: how it felt). */
+export interface Beta1SessionFeedbackResponse {
+  brainVersion: "guto-cerebro-v3"
+  requestId: string
+  traceId: string
+  presence: Beta1PresenceSummary
+}
+
 /** Deterministic per-(session, exercise) requestId: the SAME UUID for the same
  * logical execution, so retries/reloads dedupe on the backend event identity. */
 export function deriveBeta1ExecutionRequestId(input: { workoutSessionId: string; exerciseId: string }): string {
@@ -1580,6 +1598,29 @@ export async function completeGutoBeta1Workout(input: { workoutSessionId: string
       requestId: createV3RequestId(),
       workoutSessionId: input.workoutSessionId,
       completionMode: "self_report",
+    }),
+  })
+}
+
+/** PRESENCE: registers how the session FELT (the part GUTO cannot sense) and
+ * receives the deterministic outcome + the ONE follow-up question when the
+ * cause is still unknown (INVESTIGATE). Idempotent per requestId. */
+export async function recordGutoBeta1SessionFeedback(input: {
+  workoutSessionId: string
+  overallDifficulty: Beta1DifficultyLabel
+  pain?: boolean
+  causeExplanation?: string
+  causeCategory?: "user_state" | "training"
+}): Promise<Beta1SessionFeedbackResponse> {
+  return apiRequest<Beta1SessionFeedbackResponse>("/guto/v3/workout/session-feedback", {
+    method: "POST",
+    body: JSON.stringify({
+      requestId: createV3RequestId(),
+      workoutSessionId: input.workoutSessionId,
+      overallDifficulty: input.overallDifficulty,
+      ...(input.pain ? { pain: true } : {}),
+      ...(input.causeExplanation ? { causeExplanation: input.causeExplanation } : {}),
+      ...(input.causeCategory ? { causeCategory: input.causeCategory } : {}),
     }),
   })
 }
