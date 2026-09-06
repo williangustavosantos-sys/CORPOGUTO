@@ -1501,6 +1501,89 @@ export async function validateWorkout(payload: {
   )
 }
 
+// ─── BETA1 EXECUTION LOGGING + SELF-REPORT COMPLETION (memory gate) ─────────
+// Beta 1 moved selfie OUT of the critical path. The Golden Path now is: REAL
+// set-level rows per exercise via /workout/execution-feedback (deterministic
+// requestId per session+exercise — a retry/reload never duplicates history)
+// and ONE completion via /workout/complete (self_report, exactly-once). The
+// /workout/validate selfie route above stays untouched for BETA_2.
+
+export type Beta1DifficultyLabel = "FACIL" | "BOA" | "PESADA" | "DOR"
+export type Beta1TechniqueType = "STRAIGHT_SET" | "SUPERSET" | "DROP_SET" | "REST_PAUSE"
+
+export interface Beta1SetInput {
+  setNumber: number
+  loadKg?: number
+  reps?: number
+  techniqueType?: Beta1TechniqueType
+  techniqueGroup?: string
+}
+
+export interface Beta1WorkoutCompletionResult {
+  status: "completed"
+  xpGranted: boolean
+  xpAmount: number
+  nextSessionIndex: number
+  painMemoriesPersisted: number
+  progressSnapshots: Array<{ exerciseId: string; trend: string; reasonCodes: string[] }>
+}
+
+/** Deterministic per-(session, exercise) requestId: the SAME UUID for the same
+ * logical execution, so retries/reloads dedupe on the backend event identity. */
+export function deriveBeta1ExecutionRequestId(input: { workoutSessionId: string; exerciseId: string }): string {
+  return deriveWorkoutExerciseRequestId({
+    workoutSessionId: input.workoutSessionId,
+    planItemId: input.exerciseId,
+    order: 0,
+  })
+}
+
+/** Registers REAL set-level execution for ONE exercise of the session. */
+export async function recordGutoBeta1ExecutionFeedback(input: {
+  workoutSessionId: string
+  exerciseId: string
+  difficultyLabel: Beta1DifficultyLabel
+  pain?: boolean
+  sets: Beta1SetInput[]
+}): Promise<{ decision: { exerciseId: string; decision: string; reasonCode: string; explanation?: string }; setCount: number }> {
+  return apiRequest(
+    "/guto/v3/workout/execution-feedback",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: deriveBeta1ExecutionRequestId({
+          workoutSessionId: input.workoutSessionId,
+          exerciseId: input.exerciseId,
+        }),
+        workoutSessionId: input.workoutSessionId,
+        exerciseId: input.exerciseId,
+        difficultyLabel: input.difficultyLabel,
+        ...(input.pain ? { pain: true } : {}),
+        sets: input.sets.map((set) => ({
+          setNumber: set.setNumber,
+          ...(set.loadKg != null ? { loadKg: set.loadKg } : {}),
+          ...(set.reps != null ? { reps: set.reps } : {}),
+          techniqueType: set.techniqueType ?? "STRAIGHT_SET",
+          ...(set.techniqueGroup ? { techniqueGroup: set.techniqueGroup } : {}),
+        })),
+      }),
+    },
+  )
+}
+
+/** Closes the session WITHOUT selfie (self_report). Exactly-once on the
+ * backend; replays return the completed status without granting XP twice. */
+export async function completeGutoBeta1Workout(input: { workoutSessionId: string }): Promise<Beta1WorkoutCompletionResult> {
+  return apiRequest<Beta1WorkoutCompletionResult>("/guto/v3/workout/complete", {
+    method: "POST",
+    body: JSON.stringify({
+      requestId: createV3RequestId(),
+      workoutSessionId: input.workoutSessionId,
+      completionMode: "self_report",
+    }),
+  })
+}
+
 // --- Arena types ---
 
 export type ArenaAvatarStage = "baby" | "teen" | "adult" | "elite"

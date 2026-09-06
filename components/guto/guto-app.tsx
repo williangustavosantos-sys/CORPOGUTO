@@ -824,6 +824,8 @@ export function GutoApp({
   // ONLINE) e renovado após sucesso da validação — reload/retry nunca
   // reutilizam sessão completada (XP exactly-once no backend).
   const [v3WorkoutSessionId, setV3WorkoutSessionId] = useState<string | null>(null)
+  // BETA1 (memory gate): self-report execution panel (no camera).
+  const [beta1PanelOpen, setBeta1PanelOpen] = useState(false)
   const [arenaRefreshKey, setArenaRefreshKey] = useState(0)
   const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(null)
   const [inviteClaimData, setInviteClaimData] = useState<InvitePreview | null>(null)
@@ -2611,6 +2613,21 @@ export function GutoApp({
             missingProfileFields={workoutMissingFields}
             memory={memory}
             workoutSessionId={v3WorkoutSessionId}
+            onOpenBeta1Execution={() => {
+              // BETA1 Golden Path: execution feedback + self_report completion
+              // (no selfie). The session id is born on execution start.
+              setV3WorkoutSessionId((current) => current ?? createV3WorkoutSessionId())
+              setBeta1PanelOpen(true)
+            }}
+            beta1PanelOpen={beta1PanelOpen}
+            onBeta1PanelClose={() => setBeta1PanelOpen(false)}
+            onBeta1Completed={() => {
+              // Rotation advanced exactly-once on the backend; sync the UI.
+              setBeta1PanelOpen(false)
+              setV3WorkoutSessionId(null)
+              applyMemoryPatch({ trainedToday: true })
+              getGutoMemory(gutoUserId).then((fresh) => { if (fresh) setMemory(fresh) }).catch(() => {})
+            }}
           />
         )
       case "arena":
@@ -2636,7 +2653,7 @@ export function GutoApp({
       default:
         return null
     }
-  }, [activeTab, applyMemoryPatch, arenaRefreshKey, evolution, gutoUserId, handleAdaptedMissionComplete, handleExerciseQuestion, handleFoodDoubt, handleMissionComplete, localizedWorkoutPlan, memory, selectedLanguage, userLabel, v3WorkoutSessionId, workoutMissingFields])
+  }, [activeTab, applyMemoryPatch, arenaRefreshKey, beta1PanelOpen, evolution, gutoUserId, handleAdaptedMissionComplete, handleExerciseQuestion, handleFoodDoubt, handleMissionComplete, localizedWorkoutPlan, memory, selectedLanguage, userLabel, v3WorkoutSessionId, workoutMissingFields])
 
   if (authLoading || !isHydrated || (user && user.role !== "student")) {
     return (

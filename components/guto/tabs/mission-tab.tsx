@@ -10,6 +10,7 @@ import { buildCompactRows, type CompactExerciseRow } from "@/lib/mission-view"
 import { getLanguage, translations } from "../translations"
 import type { MissionExercise } from "../view-models"
 import { GutoOnlineSession } from "../guto-online-session"
+import { Beta1ExecutionPanel, type Beta1PanelExercise } from "../beta1-execution-panel"
 import { WorkoutCareNotice } from "../memory-context/workout-care-notice"
 import { gutoAudio } from "@/lib/audio-haptics"
 
@@ -38,6 +39,12 @@ interface MissionTabProps {
   /** P0 (workout validation authority): stable logical session id shared by
    * Mission/GUTO Online/ValidationFlow — required on the V3 path. */
   workoutSessionId?: string | null
+  /** BETA1 (memory gate): open the self-report execution panel (no camera).
+   * Undefined means the host has not adopted the Beta1 panel yet. */
+  onOpenBeta1Execution?: () => void
+  beta1PanelOpen?: boolean
+  onBeta1PanelClose?: () => void
+  onBeta1Completed?: () => void
 }
 
 const MUSCLE_GROUP_LABEL: Record<string, Record<string, string>> = {
@@ -80,6 +87,7 @@ const missionCopy = {
     warmup: "Aquecimento",
     mainSection: "Parte Principal",
     validateWorkout: "VALIDAR TREINO",
+    beta1Register: "REGISTRAR EXECUÇÃO (BETA)",
     gutoOnline: "GUTO PERSONAL ONLINE",
     supervisorPlan: "Definido pelo supervisor",
     mixedPlan: "Editado pelo coach",
@@ -116,6 +124,7 @@ const missionCopy = {
     warmup: "Warm-Up",
     mainSection: "Main Workout",
     validateWorkout: "VALIDATE WORKOUT",
+    beta1Register: "LOG EXECUTION (BETA)",
     gutoOnline: "GUTO PERSONAL ONLINE",
     supervisorPlan: "Set by supervisor",
     mixedPlan: "Edited by coach",
@@ -152,6 +161,7 @@ const missionCopy = {
     warmup: "Riscaldamento",
     mainSection: "Parte Principale",
     validateWorkout: "VALIDA ALLENAMENTO",
+    beta1Register: "REGISTRA ESECUZIONE (BETA)",
     gutoOnline: "GUTO PERSONAL ONLINE",
     supervisorPlan: "Definito dal supervisore",
     mixedPlan: "Modificato dal coach",
@@ -189,6 +199,10 @@ export function MissionTab({
   missingProfileFields = [],
   memory = null,
   workoutSessionId = null,
+  onOpenBeta1Execution,
+  beta1PanelOpen = false,
+  onBeta1PanelClose,
+  onBeta1Completed,
 }: MissionTabProps) {
   const validLang = getLanguage(language)
   const locale = translations[validLang]
@@ -222,6 +236,20 @@ export function MissionTab({
     (impact.workoutEffect === "protected" || impact.missionEffect === "protected")
   ))
   const canComplete = started && exercises.length > 0 && completedCount === exercises.length && !trainedToday && !invalidWorkoutVideo
+  // BETA1 panel exercises: canonical ids + structured technique for display.
+  const beta1Exercises: Beta1PanelExercise[] = useMemo(
+    () => exercises
+      .filter((exercise) => Boolean(exercise.exerciseId))
+      .map((exercise) => ({
+        id: exercise.id,
+        exerciseId: exercise.exerciseId!,
+        name: exercise.name,
+        sets: exercise.sets || 1,
+        reps: typeof exercise.reps === "number" ? String(exercise.reps) : exercise.reps || "10-12",
+        technique: (exercise as { technique?: Beta1PanelExercise["technique"] }).technique ?? null,
+      })),
+    [exercises],
+  )
   const planSourceLabel =
     workoutPlan?.source === "coach_manual"
       ? copy.supervisorPlan
@@ -521,6 +549,20 @@ export function MissionTab({
 
       {/* Action — único botão final */}
       <div className="mt-2">
+        {onOpenBeta1Execution && beta1Exercises.length > 0 && !trainedToday && (
+          <button
+            type="button"
+            onClick={() => {
+              gutoAudio.playGutoFeedback('transition')
+              // BETA1: the logical session is born here too (never only at validation).
+              onExecutionStart?.()
+              onOpenBeta1Execution()
+            }}
+            className="guto-cta-ghost mb-2 w-full"
+          >
+            {copy.beta1Register}
+          </button>
+        )}
         {invalidWorkoutVideo && (
           <p className="mb-2 rounded-[0.85rem] border border-[rgba(157,43,43,0.16)] bg-[rgba(157,43,43,0.06)] px-3 py-2 text-center font-mono text-[10px] font-black uppercase tracking-widest text-destructive">
             {copy.incompleteWorkout}
@@ -552,6 +594,17 @@ export function MissionTab({
           setCompletedExerciseIds(exercises.map((exercise) => exercise.id))
           setStarted(true)
         }}
+      />
+
+      {/* BETA1 self-report execution panel (no camera; /workout/validate is
+          preserved untouched for BETA_2). */}
+      <Beta1ExecutionPanel
+        open={beta1PanelOpen}
+        language={validLang}
+        workoutSessionId={workoutSessionId}
+        exercises={beta1Exercises}
+        onClose={() => onBeta1PanelClose?.()}
+        onCompleted={() => onBeta1Completed?.()}
       />
     </div>
   )
